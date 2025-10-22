@@ -1,0 +1,10 @@
+streamlit
+pandas
+sqlite3
+numpy
+plotly.express
+plotly.graph_objects
+datetime
+relativedelta
+re
+ARIMA
