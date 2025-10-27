@@ -1,4 +1,3 @@
-```python
 import streamlit as st
 import pandas as pd
 import sqlite3
@@ -511,4 +510,3 @@ if not df.empty:
         st.download_button("Export Contributions as CSV", df_contrib.to_csv(index=False), "family_finance_contributions.csv")
 
 conn.close()
-```
