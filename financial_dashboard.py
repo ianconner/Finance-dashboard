@@ -6,7 +6,7 @@ try:
     import plotly.express as px
     import plotly.graph_objects as go
 except ImportError:
-    st.error("Plotly is not installed. Please run 'pip install plotly' and restart the app.")
+    st.error("Plotly is not installed. Ensure 'plotly>=5.0.0' is in requirements.txt and redeploy the app.")
     st.stop()
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
@@ -14,91 +14,134 @@ import re
 try:
     from statsmodels.tsa.arima.model import ARIMA
 except ImportError:
-    st.error("Statsmodels is not installed. Please run 'pip install statsmodels' and restart the app.")
+    st.error("Statsmodels is not installed. Ensure 'statsmodels>=0.12.0' is in requirements.txt and redeploy the app.")
     st.stop()
 
 # Debug mode
 DEBUG = False
 
-# Database connection
-conn = sqlite3.connect('family_finance.db')
-c = conn.cursor()
+# Note for Streamlit Cloud: SQLite database resets on redeploy
+st.info("Note: Database resets on Streamlit Cloud redeploy. Re-upload 'combined_finances_all.csv' to restore data.")
+
+# Database connection with error handling
+try:
+    conn = sqlite3.connect('family_finance.db', check_same_thread=False)
+    c = conn.cursor()
+except Exception as e:
+    st.error(f"Failed to connect to database: {str(e)}. Try resetting the database or re-uploading the CSV.")
+    st.stop()
 
 # Function to reset database
 def reset_database():
-    c.execute("DROP TABLE IF EXISTS monthly_updates")
-    c.execute("DROP TABLE IF EXISTS accounts")
-    c.execute("DROP TABLE IF EXISTS account_config")
-    c.execute("DROP TABLE IF EXISTS contributions")
-    c.execute('''CREATE TABLE accounts 
-                 (person TEXT, account_type TEXT, initial_value REAL, start_date TEXT)''')
-    c.execute('''CREATE TABLE monthly_updates 
-                 (date TEXT, person TEXT, account_type TEXT, value REAL, 
-                  PRIMARY KEY (date, person, account_type))''')
-    c.execute('''CREATE TABLE account_config 
-                 (person TEXT, account_type TEXT, PRIMARY KEY (person, account_type))''')
-    c.execute('''CREATE TABLE contributions 
-                 (date TEXT, person TEXT, account_type TEXT, contribution REAL, 
-                  PRIMARY KEY (date, person, account_type))''')
-    default_accounts = {
-        'Sean': ['IRA', 'Roth IRA', 'TSP', 'Personal', 'T3W'],
-        'Kim': ['Retirement'],
-        'Taylor': ['Personal']
-    }
-    for person, acc_types in default_accounts.items():
-        for acc_type in acc_types:
-            c.execute("INSERT OR IGNORE INTO account_config (person, account_type) VALUES (?, ?)", (person, acc_type))
-    conn.commit()
+    try:
+        c.execute("DROP TABLE IF EXISTS monthly_updates")
+        c.execute("DROP TABLE IF EXISTS accounts")
+        c.execute("DROP TABLE IF EXISTS account_config")
+        c.execute("DROP TABLE IF EXISTS contributions")
+        c.execute('''CREATE TABLE accounts 
+                     (person TEXT, account_type TEXT, initial_value REAL, start_date TEXT)''')
+        c.execute('''CREATE TABLE monthly_updates 
+                     (date TEXT, person TEXT, account_type TEXT, value REAL, 
+                      PRIMARY KEY (date, person, account_type))''')
+        c.execute('''CREATE TABLE account_config 
+                     (person TEXT, account_type TEXT, PRIMARY KEY (person, account_type))''')
+        c.execute('''CREATE TABLE contributions 
+                     (date TEXT, person TEXT, account_type TEXT, contribution REAL, 
+                      PRIMARY KEY (date, person, account_type))''')
+        default_accounts = {
+            'Sean': ['IRA', 'Roth IRA', 'TSP', 'Personal', 'T3W'],
+            'Kim': ['Retirement'],
+            'Taylor': ['Personal']
+        }
+        for person, acc_types in default_accounts.items():
+            for acc_type in acc_types:
+                c.execute("INSERT OR IGNORE INTO account_config (person, account_type) VALUES (?, ?)", (person, acc_type))
+        conn.commit()
+        if DEBUG:
+            st.write("Debug: Database reset successfully with default accounts.")
+    except Exception as e:
+        st.error(f"Failed to reset database: {str(e)}")
+        st.stop()
 
 # Load accounts from database
 def load_accounts():
-    c.execute("SELECT person, account_type FROM account_config")
-    rows = c.fetchall()
-    accounts = {}
-    for person, account_type in rows:
-        if person not in accounts:
-            accounts[person] = []
-        accounts[person].append(account_type)
-    if not accounts:
-        reset_database()
-        return load_accounts()
-    return accounts
+    try:
+        # Check if account_config table exists
+        c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='account_config'")
+        if not c.fetchone():
+            if DEBUG:
+                st.write("Debug: account_config table not found, resetting database.")
+            reset_database()
+        c.execute("SELECT person, account_type FROM account_config")
+        rows = c.fetchall()
+        accounts = {}
+        for person, account_type in rows:
+            if person not in accounts:
+                accounts[person] = []
+            accounts[person].append(account_type)
+        if not accounts:
+            if DEBUG:
+                st.write("Debug: No accounts found, resetting database.")
+            reset_database()
+            return load_accounts()
+        return accounts
+    except Exception as e:
+        st.error(f"Error loading accounts: {str(e)}. Try resetting the database or re-uploading the CSV.")
+        st.stop()
 
 # Function to add new person
 def add_person(person_name):
-    c.execute("INSERT OR IGNORE INTO account_config (person, account_type) VALUES (?, ?)", (person_name, 'Default'))
-    conn.commit()
+    try:
+        c.execute("INSERT OR IGNORE INTO account_config (person, account_type) VALUES (?, ?)", (person_name, 'Default'))
+        conn.commit()
+    except Exception as e:
+        st.error(f"Error adding person: {str(e)}")
 
 # Function to add account type
 def add_account_type(person, account_type):
-    c.execute("INSERT OR IGNORE INTO account_config (person, account_type) VALUES (?, ?)", (person, account_type))
-    conn.commit()
+    try:
+        c.execute("INSERT OR IGNORE INTO account_config (person, account_type) VALUES (?, ?)", (person, account_type))
+        conn.commit()
+    except Exception as e:
+        st.error(f"Error adding account type: {str(e)}")
 
 # Function to delete account type
 def delete_account_type(person, account_type):
-    c.execute("DELETE FROM account_config WHERE person=? AND account_type=?", (person, account_type))
-    c.execute("DELETE FROM monthly_updates WHERE person=? AND account_type=?", (person, account_type))
-    c.execute("DELETE FROM contributions WHERE person=? AND account_type=?", (person, account_type))
-    conn.commit()
+    try:
+        c.execute("DELETE FROM account_config WHERE person=? AND account_type=?", (person, account_type))
+        c.execute("DELETE FROM monthly_updates WHERE person=? AND account_type=?", (person, account_type))
+        c.execute("DELETE FROM contributions WHERE person=? AND account_type=?", (person, account_type))
+        conn.commit()
+    except Exception as e:
+        st.error(f"Error deleting account type: {str(e)}")
 
 # Function to delete person
 def delete_person(person):
-    c.execute("DELETE FROM account_config WHERE person=?", (person,))
-    c.execute("DELETE FROM monthly_updates WHERE person=?", (person,))
-    c.execute("DELETE FROM contributions WHERE person=?", (person,))
-    conn.commit()
+    try:
+        c.execute("DELETE FROM account_config WHERE person=?", (person,))
+        c.execute("DELETE FROM monthly_updates WHERE person=?", (person,))
+        c.execute("DELETE FROM contributions WHERE person=?", (person,))
+        conn.commit()
+    except Exception as e:
+        st.error(f"Error deleting person: {str(e)}")
 
 # Function to add/update monthly values
 def add_monthly_update(date, person, account_type, value):
-    c.execute("INSERT OR REPLACE INTO monthly_updates (date, person, account_type, value) VALUES (?, ?, ?, ?)",
-              (date, person, account_type, value))
-    conn.commit()
+    try:
+        c.execute("INSERT OR REPLACE INTO monthly_updates (date, person, account_type, value) VALUES (?, ?, ?, ?)",
+                  (date, person, account_type, value))
+        conn.commit()
+    except Exception as e:
+        st.error(f"Error adding monthly update: {str(e)}")
 
 # Function to add/update monthly contributions
 def add_monthly_contribution(date, person, account_type, contribution):
-    c.execute("INSERT OR REPLACE INTO contributions (date, person, account_type, contribution) VALUES (?, ?, ?, ?)",
-              (date, person, account_type, contribution))
-    conn.commit()
+    try:
+        c.execute("INSERT OR REPLACE INTO contributions (date, person, account_type, contribution) VALUES (?, ?, ?, ?)",
+                  (date, person, account_type, contribution))
+        conn.commit()
+    except Exception as e:
+        st.error(f"Error adding monthly contribution: {str(e)}")
 
 # Function to import CSV data with duplicate preview
 def import_csv_data(file, accounts, table='monthly_updates'):
@@ -155,12 +198,16 @@ def import_csv_data(file, accounts, table='monthly_updates'):
 
 # Function to get all data as DataFrame
 def get_data(table='monthly_updates'):
-    df = pd.read_sql_query(f"SELECT * FROM {table}", conn)
-    if df.empty:
+    try:
+        df = pd.read_sql_query(f"SELECT * FROM {table}", conn)
+        if df.empty:
+            return pd.DataFrame()
+        df['date'] = pd.to_datetime(df['date'], format='mixed', errors='coerce')
+        df = df.dropna(subset=['date'])
+        return df.sort_values('date')
+    except Exception as e:
+        st.error(f"Error loading data from {table}: {str(e)}")
         return pd.DataFrame()
-    df['date'] = pd.to_datetime(df['date'], format='mixed', errors='coerce')
-    df = df.dropna(subset=['date'])
-    return df.sort_values('date')
 
 # Function for inflation adjustment
 def adjust_for_inflation(value, start_date, end_date, inflation_rate=0.025):
@@ -223,20 +270,29 @@ st.markdown("""
 <style>
 .main .block-container { max-width: 100%; padding: 1rem; }
 @media (max-width: 768px) { .main .block-container { padding: 0.5rem; } }
+.css-1v3fvcr { position: sticky; top: 0; }
+@media (prefers-color-scheme: dark) {
+    .main { background-color: #1e1e1e; color: #ffffff; }
+    .stPlotlyChart { background-color: #2a2a2a; }
+}
 </style>
 """, unsafe_allow_html=True)
 st.title("Family Finance Dashboard")
 
 # Sidebar for data import and updates
 st.sidebar.header("Manage Data")
-accounts = load_accounts()
+try:
+    accounts = load_accounts()
+except Exception as e:
+    st.error(f"Failed to load accounts: {str(e)}. Click 'Reset Database' or re-upload CSV.")
+    accounts = {}
 
 # Month-to-month update form
 with st.sidebar.form("monthly_update_form"):
     st.subheader("Add Monthly Update")
     update_date = st.text_input("Date (YYYY-MM, e.g., 2025-11)", value=datetime.now().strftime("%Y-%m"))
-    update_person = st.selectbox("Person", list(accounts.keys()))
-    update_account_type = st.selectbox("Account Type", accounts[update_person])
+    update_person = st.selectbox("Person", list(accounts.keys()) if accounts else ['Sean', 'Kim', 'Taylor'])
+    update_account_type = st.selectbox("Account Type", accounts.get(update_person, ['Default']) if accounts else ['Default'])
     update_value = st.number_input("Value/Contribution ($)", min_value=0.0, step=100.0)
     update_table = st.selectbox("Table", ["monthly_updates (Values)", "contributions (Contributions)"])
     submit_button = st.form_submit_button("Add Update")
@@ -270,7 +326,7 @@ with st.sidebar.form("import_values_form"):
     if st.form_submit_button("Import Values"):
         if values_file:
             success, message = import_csv_data(values_file, accounts, table='monthly_updates')
-            st.sidebar.write(message)
+            st.sidebar.info(message)
 
 with st.sidebar.form("import_contributions_form"):
     st.subheader("Import Contributions")
@@ -278,12 +334,12 @@ with st.sidebar.form("import_contributions_form"):
     if st.form_submit_button("Import Contributions"):
         if contributions_file:
             success, message = import_csv_data(contributions_file, accounts, table='contributions')
-            st.sidebar.write(message)
+            st.sidebar.info(message)
 
 # Reset database option
 if st.sidebar.button("Reset Database"):
     reset_database()
-    st.sidebar.success("Database reset successfully!")
+    st.sidebar.success("Database reset successfully! Please re-upload CSV data.")
 
 # Refresh button
 if st.sidebar.button("Refresh Dashboard"):
@@ -304,54 +360,58 @@ if DEBUG:
     st.write("Debug: DataFrame Head", df.head())
     st.write("Debug: DataFrame Columns", df.columns)
 
+# Column layout
+col1, col2 = st.columns([1, 1])
+
 # Month-to-Month Breakdown Table (in tabs per year)
-with st.expander("Month-to-Month Breakdown", expanded=True):
-    if not df.empty:
-        df['year'] = df['date'].dt.year
-        df['month'] = df['date'].dt.strftime('%Y-%m')
-        df_pivot = df.pivot_table(index=['year', 'month'], columns='person', values='contribution', aggfunc='sum', fill_value=0).reset_index()
-        df_pivot['Sean_Kim'] = df_pivot['Sean'] + df_pivot['Kim']
-        
-        df_pivot['Sean_%_prev'] = df_pivot['Sean'].pct_change() * 100
-        df_pivot['Kim_%_prev'] = df_pivot['Kim'].pct_change() * 100
-        df_pivot['Taylor_%_prev'] = df_pivot.get('Taylor', 0).pct_change() * 100
-        df_pivot['Sean_Kim_%_prev'] = df_pivot['Sean_Kim'].pct_change() * 100
-        
-        df_dec_prev = df[df['month'].str.endswith('-12')].pivot_table(index='year', columns='person', values='contribution', aggfunc='sum', fill_value=0)
-        df_dec_prev['Sean_Kim'] = df_dec_prev['Sean'] + df_dec_prev['Kim']
-        df_pivot['Sean_%_ytd'] = 0.0
-        df_pivot['Kim_%_ytd'] = 0.0
-        df_pivot['Taylor_%_ytd'] = 0.0
-        df_pivot['Sean_Kim_%_ytd'] = 0.0
-        
-        for i, row in df_pivot.iterrows():
-            year = row['year']
-            prev_year = year - 1
-            if prev_year in df_dec_prev.index:
-                prev_dec = df_dec_prev.loc[prev_year]
-                for person in ['Sean', 'Kim', 'Taylor', 'Sean_Kim']:
-                    if person in prev_dec and prev_dec[person] != 0:
-                        df_pivot.at[i, f'{person}_%_ytd'] = (row[person] - prev_dec[person]) / prev_dec[person] * 100
-        
-        df_pivot = df_pivot[['year', 'month', 'Sean', 'Kim', 'Taylor', 'Sean_Kim', 
-                             'Sean_%_prev', 'Kim_%_prev', 'Taylor_%_prev', 'Sean_Kim_%_prev',
-                             'Sean_%_ytd', 'Kim_%_ytd', 'Taylor_%_ytd', 'Sean_Kim_%_ytd']]
-        
-        if DEBUG:
-            st.write("Debug: df_pivot", df_pivot.tail())
-        
-        years = sorted(df_pivot['year'].unique())
-        tabs = st.tabs([str(year) for year in years])
-        for tab, year in zip(tabs, years):
-            with tab:
-                year_df = df_pivot[df_pivot['year'] == year].drop(columns=['year'])
-                st.dataframe(year_df.style.format({
-                    'Sean': '${:,.2f}', 'Kim': '${:,.2f}', 'Taylor': '${:,.2f}', 'Sean_Kim': '${:,.2f}',
-                    'Sean_%_prev': '{:.1f}%', 'Kim_%_prev': '{:.1f}%', 'Taylor_%_prev': '{:.1f}%', 'Sean_Kim_%_prev': '{:.1f}%',
-                    'Sean_%_ytd': '{:.1f}%', 'Kim_%_ytd': '{:.1f}%', 'Taylor_%_ytd': '{:.1f}%', 'Sean_Kim_%_ytd': '{:.1f}%'
-                }))
-    else:
-        st.write("No data available. Please import a CSV file or add monthly updates.")
+with col1:
+    with st.expander("Month-to-Month Breakdown", expanded=True):
+        if not df.empty:
+            df['year'] = df['date'].dt.year
+            df['month'] = df['date'].dt.strftime('%Y-%m')
+            df_pivot = df.pivot_table(index=['year', 'month'], columns='person', values='contribution', aggfunc='sum', fill_value=0).reset_index()
+            df_pivot['Sean_Kim'] = df_pivot['Sean'] + df_pivot['Kim']
+            
+            df_pivot['Sean_%_prev'] = df_pivot['Sean'].pct_change() * 100
+            df_pivot['Kim_%_prev'] = df_pivot['Kim'].pct_change() * 100
+            df_pivot['Taylor_%_prev'] = df_pivot.get('Taylor', 0).pct_change() * 100
+            df_pivot['Sean_Kim_%_prev'] = df_pivot['Sean_Kim'].pct_change() * 100
+            
+            df_dec_prev = df[df['month'].str.endswith('-12')].pivot_table(index='year', columns='person', values='contribution', aggfunc='sum', fill_value=0)
+            df_dec_prev['Sean_Kim'] = df_dec_prev['Sean'] + df_dec_prev['Kim']
+            df_pivot['Sean_%_ytd'] = 0.0
+            df_pivot['Kim_%_ytd'] = 0.0
+            df_pivot['Taylor_%_ytd'] = 0.0
+            df_pivot['Sean_Kim_%_ytd'] = 0.0
+            
+            for i, row in df_pivot.iterrows():
+                year = row['year']
+                prev_year = year - 1
+                if prev_year in df_dec_prev.index:
+                    prev_dec = df_dec_prev.loc[prev_year]
+                    for person in ['Sean', 'Kim', 'Taylor', 'Sean_Kim']:
+                        if person in prev_dec and prev_dec[person] != 0:
+                            df_pivot.at[i, f'{person}_%_ytd'] = (row[person] - prev_dec[person]) / prev_dec[person] * 100
+            
+            df_pivot = df_pivot[['year', 'month', 'Sean', 'Kim', 'Taylor', 'Sean_Kim', 
+                                 'Sean_%_prev', 'Kim_%_prev', 'Taylor_%_prev', 'Sean_Kim_%_prev',
+                                 'Sean_%_ytd', 'Kim_%_ytd', 'Taylor_%_ytd', 'Sean_Kim_%_ytd']]
+            
+            if DEBUG:
+                st.write("Debug: df_pivot", df_pivot.tail())
+            
+            years = sorted(df_pivot['year'].unique())
+            tabs = st.tabs([str(year) for year in years])
+            for tab, year in zip(tabs, years):
+                with tab:
+                    year_df = df_pivot[df_pivot['year'] == year].drop(columns=['year'])
+                    st.dataframe(year_df.style.format({
+                        'Sean': '${:,.2f}', 'Kim': '${:,.2f}', 'Taylor': '${:,.2f}', 'Sean_Kim': '${:,.2f}',
+                        'Sean_%_prev': '{:.1f}%', 'Kim_%_prev': '{:.1f}%', 'Taylor_%_prev': '{:.1f}%', 'Sean_Kim_%_prev': '{:.1f}%',
+                        'Sean_%_ytd': '{:.1f}%', 'Kim_%_ytd': '{:.1f}%', 'Taylor_%_ytd': '{:.1f}%', 'Sean_Kim_%_ytd': '{:.1f}%'
+                    }))
+        else:
+            st.write("No data available. Please import a CSV file or add monthly updates.")
 
 # Calculate monthly totals for Kim and Sean
 current_date = datetime.now()
@@ -371,137 +431,164 @@ if DEBUG:
     st.write("Debug: Latest Month Total", latest_month_total)
 
 # Retirement Forecast (Monthly Progress)
-with st.expander("Retirement Forecast (Monthly Progress)", expanded=True):
-    if not df.empty:
-        df['year'] = df['date'].dt.year
-        df_monthly = df[df['person'].isin(['Kim', 'Sean'])].groupby(['year', df['date'].dt.strftime('%Y-%m')])['contribution'].sum().reset_index()
-        df_monthly = df_monthly.rename(columns={'contribution': 'monthly_total', 'date': 'month'})
-        df_monthly['inflation_adjusted'] = [adjust_for_inflation(v, pd.to_datetime(m + '-01'), current_date) 
-                                           for v, m in zip(df_monthly['monthly_total'], df_monthly['month'])]
-    else:
-        df_monthly = pd.DataFrame()
-    
-    future_years = list(range(current_date.year, 2043))
-    future_months = (2042 - current_date.year) * 12 + (12 - current_date.month + 1)
-    
-    if not df_total.empty:
-        baseline_pred = baseline_prediction(latest_sean_kim, monthly_contribution, current_date, datetime(2042, 12, 31), annual_rate=annual_rate_value)
-        ml_pred, error = ml_prediction(df_pivot, monthly_contribution, datetime(2042, 12, 31))
-        
-        arima_data = df_pivot['Sean_Kim'].values
-        if len(arima_data) >= 12:
-            model = ARIMA(arima_data, order=(1, 1, 1))
-            model_fit = model.fit()
-            arima_forecast = model_fit.forecast(steps=future_months)
-            future_dates = [pd.to_datetime(df_pivot['month'].iloc[-1] + '-01') + relativedelta(months=i+1) for i in range(future_months)]
-            ml_monthly = arima_forecast + np.array([monthly_contribution * (1 + annual_rate_value / 12) ** i for i in range(future_months)])
-            ml_monthly_inflated = [adjust_for_inflation(v, d, current_date) for v, d in zip(ml_monthly, future_dates)]
+with col2:
+    with st.expander("Retirement Forecast (Monthly Progress)", expanded=True):
+        if not df.empty:
+            df['year'] = df['date'].dt.year
+            df_monthly = df[df['person'].isin(['Kim', 'Sean'])].groupby(['year', df['date'].dt.strftime('%Y-%m')])['contribution'].sum().reset_index()
+            df_monthly = df_monthly.rename(columns={'contribution': 'monthly_total', 'date': 'month'})
+            df_monthly['inflation_adjusted'] = [adjust_for_inflation(v, pd.to_datetime(m + '-01'), current_date) 
+                                               for v, m in zip(df_monthly['monthly_total'], df_monthly['month'])]
         else:
-            ml_monthly = []
-            ml_monthly_inflated = []
+            df_monthly = pd.DataFrame()
         
-        baseline_monthly = [latest_sean_kim * (1 + annual_rate_value / 12) ** i + monthly_contribution * ((1 + annual_rate_value / 12) ** i - 1) / (annual_rate_value / 12) if monthly_contribution else latest_sean_kim * (1 + annual_rate_value / 12) ** i for i in range(1, future_months + 1)]
-        baseline_monthly_inflated = [adjust_for_inflation(v, d, current_date) for v, d in zip(baseline_monthly, future_dates)]
+        future_years = list(range(current_date.year, 2043))
+        future_months = (2042 - current_date.year) * 12 + (12 - current_date.month + 1)
         
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(x=df_pivot['month'], y=df_pivot['Sean_Kim'], mode='lines+markers', name='Historical Sean + Kim'))
-        fig.add_trace(go.Scatter(x=df_pivot['month'], y=[adjust_for_inflation(v, pd.to_datetime(m + '-01'), current_date) for v, m in zip(df_pivot['Sean_Kim'], df_pivot['month'])], mode='lines+markers', name='Historical Sean + Kim (Inflation-Adjusted)'))
-        if ml_monthly.size > 0:
-            fig.add_trace(go.Scatter(x=[d.strftime('%Y-%m') for d in future_dates], y=ml_monthly, mode='lines+markers', name='ML Prediction (ARIMA)', line=dict(dash='dash')))
-            fig.add_trace(go.Scatter(x=[d.strftime('%Y-%m') for d in future_dates], y=ml_monthly_inflated, mode='lines+markers', name='ML Prediction (Inflation-Adjusted)', line=dict(dash='dash')))
-        fig.add_trace(go.Scatter(x=[d.strftime('%Y-%m') for d in future_dates], y=baseline_monthly, mode='lines+markers', name=f'Baseline {annual_rate}', line=dict(dash='dash')))
-        fig.add_trace(go.Scatter(x=[d.strftime('%Y-%m') for d in future_dates], y=baseline_monthly_inflated, mode='lines+markers', name=f'Baseline {annual_rate} (Inflation-Adjusted)', line=dict(dash='dash')))
-        fig.update_layout(xaxis_title='Month', yaxis_title='Balance ($)', xaxis_tickangle=-45, hovermode='x unified', dragmode='zoom')
-        st.plotly_chart(fig, use_container_width=True)
-        
-        # Export forecast data
-        forecast_df = pd.DataFrame({
-            'Date': [d.strftime('%Y-%m') for d in future_dates],
-            'Baseline': baseline_monthly,
-            'Baseline (Inflation-Adjusted)': baseline_monthly_inflated,
-            'ML (ARIMA)': ml_monthly if ml_monthly.size > 0 else [None] * len(future_dates),
-            'ML (Inflation-Adjusted)': ml_monthly_inflated if ml_monthly.size > 0 else [None] * len(future_dates)
-        })
-        st.download_button("Export Forecast Data as CSV", forecast_df.to_csv(index=False), "forecast_data.csv")
-        
-        if DEBUG:
-            st.write("Debug: Baseline Forecast", baseline_pred)
-            st.write("Debug: ML Forecast", ml_pred)
-            st.write("Debug: Future Months", future_months)
+        if not df_total.empty:
+            baseline_pred = baseline_prediction(latest_sean_kim, monthly_contribution, current_date, datetime(2042, 12, 31), annual_rate=annual_rate_value)
+            ml_pred, error = ml_prediction(df_pivot, monthly_contribution, datetime(2042, 12, 31))
+            
+            arima_data = df_pivot['Sean_Kim'].values
+            if len(arima_data) >= 12:
+                model = ARIMA(arima_data, order=(1, 1, 1))
+                model_fit = model.fit()
+                arima_forecast = model_fit.forecast(steps=future_months)
+                future_dates = [pd.to_datetime(df_pivot['month'].iloc[-1] + '-01') + relativedelta(months=i+1) for i in range(future_months)]
+                ml_monthly = arima_forecast + np.array([monthly_contribution * (1 + annual_rate_value / 12) ** i for i in range(future_months)])
+                ml_monthly_inflated = [adjust_for_inflation(v, d, current_date) for v, d in zip(ml_monthly, future_dates)]
+            else:
+                ml_monthly = []
+                ml_monthly_inflated = []
+            
+            baseline_monthly = [latest_sean_kim * (1 + annual_rate_value / 12) ** i + monthly_contribution * ((1 + annual_rate_value / 12) ** i - 1) / (annual_rate_value / 12) if monthly_contribution else latest_sean_kim * (1 + annual_rate_value / 12) ** i for i in range(1, future_months + 1)]
+            baseline_monthly_inflated = [adjust_for_inflation(v, d, current_date) for v, d in zip(baseline_monthly, future_dates)]
+            
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=df_pivot['month'], y=df_pivot['Sean_Kim'], mode='lines+markers', name='Historical Sean + Kim'))
+            fig.add_trace(go.Scatter(x=df_pivot['month'], y=[adjust_for_inflation(v, pd.to_datetime(m + '-01'), current_date) for v, m in zip(df_pivot['Sean_Kim'], df_pivot['month'])], mode='lines+markers', name='Historical Sean + Kim (Inflation-Adjusted)'))
+            if ml_monthly.size > 0:
+                fig.add_trace(go.Scatter(x=[d.strftime('%Y-%m') for d in future_dates], y=ml_monthly, mode='lines+markers', name='ML Prediction (ARIMA)', line=dict(dash='dash')))
+                fig.add_trace(go.Scatter(x=[d.strftime('%Y-%m') for d in future_dates], y=ml_monthly_inflated, mode='lines+markers', name='ML Prediction (Inflation-Adjusted)', line=dict(dash='dash')))
+            fig.add_trace(go.Scatter(x=[d.strftime('%Y-%m') for d in future_dates], y=baseline_monthly, mode='lines+markers', name=f'Baseline {annual_rate}', line=dict(dash='dash')))
+            fig.add_trace(go.Scatter(x=[d.strftime('%Y-%m') for d in future_dates], y=baseline_monthly_inflated, mode='lines+markers', name=f'Baseline {annual_rate} (Inflation-Adjusted)', line=dict(dash='dash')))
+            fig.update_layout(xaxis_title='Month', yaxis_title='Balance ($)', xaxis_tickangle=-45, hovermode='x unified', dragmode='zoom')
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # Export forecast data
+            forecast_df = pd.DataFrame({
+                'Date': [d.strftime('%Y-%m') for d in future_dates],
+                'Baseline': baseline_monthly,
+                'Baseline (Inflation-Adjusted)': baseline_monthly_inflated,
+                'ML (ARIMA)': ml_monthly if ml_monthly.size > 0 else [None] * len(future_dates),
+                'ML (Inflation-Adjusted)': ml_monthly_inflated if ml_monthly.size > 0 else [None] * len(future_dates)
+            })
+            st.download_button("Export Forecast Data as CSV", forecast_df.to_csv(index=False), "forecast_data.csv")
+            
+            if DEBUG:
+                st.write("Debug: Baseline Forecast", baseline_pred)
+                st.write("Debug: ML Forecast", ml_pred)
+                st.write("Debug: Future Months", future_months)
 
 # Goal Progress Tracker
-with st.expander("Retirement Goal Progress"):
-    if latest_sean_kim > 0:
-        progress = min(latest_sean_kim / goal_amounts[0], 1.0) if goal_amounts else 0
-        goal_data = {
-            'Metric': ['Current (Latest Month)', 'Baseline Forecast (2042)', 'ML Forecast (2042)'],
-            'Value': [latest_sean_kim, baseline_pred, ml_pred if ml_pred else 'N/A'],
-            **{f'Progress (%) - Goal ${g/1000000:.1f}M': [latest_sean_kim/g*100, baseline_pred/g*100, (ml_pred/g*100) if ml_pred else 'N/A'] for g in goal_amounts}
-        }
-        def format_value(x):
-            return '${:,.2f}'.format(x) if isinstance(x, (int, float)) else x
-        def format_progress(x):
-            return '{:.1f}%'.format(x) if isinstance(x, (int, float)) else x
-        def style_progress(val):
-            if isinstance(val, (int, float)):
-                color = 'green' if val > 100 else 'yellow' if val > 50 else 'red'
-                return f'color: {color}'
-            return ''
-        
-        st.progress(progress)
-        st.write(f"Current Progress (Goal ${goal_amounts[0]/1000000:.1f}M): {progress*100:.1f}% (${latest_sean_kim:,.2f} of ${goal_amounts[0]:,.2f})")
-        st.table(pd.DataFrame(goal_data).style.format({
-            'Value': format_value,
-            **{f'Progress (%) - Goal ${g/1000000:.1f}M': format_progress for g in goal_amounts}
-        }).applymap(style_progress, subset=[f'Progress (%) - Goal ${g/1000000:.1f}M' for g in goal_amounts]))
-    else:
-        st.write("No Sean + Kim data available for goal progress.")
+with col1:
+    with st.expander("Retirement Goal Progress"):
+        if latest_sean_kim > 0:
+            progress = min(latest_sean_kim / goal_amounts[0], 1.0) if goal_amounts else 0
+            goal_data = {
+                'Metric': ['Current (Latest Month)', 'Baseline Forecast (2042)', 'ML Forecast (2042)'],
+                'Value': [latest_sean_kim, baseline_pred, ml_pred if ml_pred else 'N/A'],
+                **{f'Progress (%) - Goal ${g/1000000:.1f}M': [latest_sean_kim/g*100, baseline_pred/g*100, (ml_pred/g*100) if ml_pred else 'N/A'] for g in goal_amounts}
+            }
+            def format_value(x):
+                return '${:,.2f}'.format(x) if isinstance(x, (int, float)) else x
+            def format_progress(x):
+                return '{:.1f}%'.format(x) if isinstance(x, (int, float)) else x
+            def style_progress(val):
+                if isinstance(val, (int, float)):
+                    color = 'green' if val > 100 else 'yellow' if val > 50 else 'red'
+                    return f'color: {color}'
+                return ''
+            
+            st.progress(progress)
+            st.write(f"Current Progress (Goal ${goal_amounts[0]/1000000:.1f}M): {progress*100:.1f}% (${latest_sean_kim:,.2f} of ${goal_amounts[0]:,.2f})")
+            st.table(pd.DataFrame(goal_data).style.format({
+                'Value': format_value,
+                **{f'Progress (%) - Goal ${g/1000000:.1f}M': format_progress for g in goal_amounts}
+            }).applymap(style_progress, subset=[f'Progress (%) - Goal ${g/1000000:.1f}M' for g in goal_amounts]))
+        else:
+            st.write("No Sean + Kim data available for goal progress.")
 
 # Portfolio Performance
-with st.expander("Portfolio Performance"):
-    if len(df_total) > 1:
-        monthly_returns = df_total['monthly_total'].pct_change().dropna()
-        annualized_return = ((1 + monthly_returns.mean()) ** 12 - 1) * 100
-        annualized_volatility = monthly_returns.std() * np.sqrt(12) * 100
-        st.write(f"Annualized Return (Kim and Sean, Monthly): {annualized_return:.2f}%")
-        st.write(f"Annualized Volatility: {annualized_volatility:.2f}%")
-        
-        years_to_2042 = 2042 - current_date.year
-        simulations = monte_carlo_simulation(latest_sean_kim, years_to_2042, annual_rate_value, 0.15, 10000)
-        percentiles = np.percentile(simulations, [25, 50, 75])
-        st.write(f"Monte Carlo 2042 Outcomes (10,000 simulations, based on latest Sean + Kim):")
-        st.write(f"25th Percentile: ${percentiles[0]:,.2f}")
-        st.write(f"Median: ${percentiles[1]:,.2f}")
-        st.write(f"75th Percentile: ${percentiles[2]:,.2f}")
-        
-        fig = px.histogram(simulations, nbins=50, title='Monte Carlo Outcomes Distribution (based on latest Sean + Kim)')
-        fig.add_vline(x=percentiles[0], line_dash="dash", line_color="red", annotation_text="25th")
-        fig.add_vline(x=percentiles[1], line_dash="dash", line_color="green", annotation_text="Median")
-        fig.add_vline(x=percentiles[2], line_dash="dash", line_color="blue", annotation_text="75th")
-        fig.update_layout(hovermode='x unified', dragmode='zoom')
-        st.plotly_chart(fig, use_container_width=True)
+with col2:
+    with st.expander("Portfolio Performance"):
+        if len(df_total) > 1:
+            monthly_returns = df_total['monthly_total'].pct_change().dropna()
+            annualized_return = ((1 + monthly_returns.mean()) ** 12 - 1) * 100
+            annualized_volatility = monthly_returns.std() * np.sqrt(12) * 100
+            st.write(f"Annualized Return (Kim and Sean, Monthly): {annualized_return:.2f}%")
+            st.write(f"Annualized Volatility: {annualized_volatility:.2f}%")
+            
+            years_to_2042 = 2042 - current_date.year
+            simulations = monte_carlo_simulation(latest_sean_kim, years_to_2042, annual_rate_value, 0.15, 10000)
+            percentiles = np.percentile(simulations, [25, 50, 75])
+            st.write(f"Monte Carlo 2042 Outcomes (10,000 simulations, based on latest Sean + Kim):")
+            st.write(f"25th Percentile: ${percentiles[0]:,.2f}")
+            st.write(f"Median: ${percentiles[1]:,.2f}")
+            st.write(f"75th Percentile: ${percentiles[2]:,.2f}")
+            
+            fig = px.histogram(simulations, nbins=50, title='Monte Carlo Outcomes Distribution (based on latest Sean + Kim)')
+            fig.add_vline(x=percentiles[0], line_dash="dash", line_color="red", annotation_text="25th")
+            fig.add_vline(x=percentiles[1], line_dash="dash", line_color="green", annotation_text="Median")
+            fig.add_vline(x=percentiles[2], line_dash="dash", line_color="blue", annotation_text="75th")
+            fig.update_layout(hovermode='x unified', dragmode='zoom')
+            st.plotly_chart(fig, use_container_width=True)
 
 # Benchmark Comparison
-with st.expander(f"Performance vs. S&P 500 Benchmark ({annual_rate})"):
-    if len(df_total) > 1:
-        actual_growth = (df_total['monthly_total'].iloc[-1] / df_total['monthly_total'].iloc[0] - 1) * 100
-        months_elapsed = len(df_total) - 1
-        benchmark_growth = ((1 + annual_rate_value / 12) ** months_elapsed - 1) * 100
-        st.write(f"Kim and Sean annualized monthly growth: {actual_growth / (months_elapsed / 12):.2f}%")
-        st.write(f"S&P Benchmark: {annual_rate_value*100:.2f}%")
-        if actual_growth > benchmark_growth:
-            st.success("Beating the market!")
-        else:
-            st.warning("Underperforming the market.")
+with col1:
+    with st.expander(f"Performance vs. S&P 500 Benchmark ({annual_rate})"):
+        if len(df_total) > 1:
+            actual_growth = (df_total['monthly_total'].iloc[-1] / df_total['monthly_total'].iloc[0] - 1) * 100
+            months_elapsed = len(df_total) - 1
+            benchmark_growth = ((1 + annual_rate_value / 12) ** months_elapsed - 1) * 100
+            st.write(f"Kim and Sean annualized monthly growth: {actual_growth / (months_elapsed / 12):.2f}%")
+            st.write(f"S&P Benchmark: {annual_rate_value*100:.2f}%")
+            if actual_growth > benchmark_growth:
+                st.success("Beating the market!")
+            else:
+                st.warning("Underperforming the market.")
 
 # Year-to-Year Progress
-with st.expander("Year-to-Year Progress"):
-    if not df.empty:
-        df_yearly = df_pivot.groupby('year')['Sean_Kim'].last().reset_index()
-        fig_yearly = go.Figure()
-        fig_yearly.add_trace(go.Scatter(x=df_yearly['year'], y=df_yearly['Sean_Kim'], mode='lines+markers', name='Sean + Kim'))
-        fig_yearly.update_layout(xaxis_title='Year', yaxis_title='End-of-Year Balance ($)', xaxis_tickangle=-45, hovermode='x unified', dragmode='zoom')
-        st.plotly_chart(fig_yearly, use_container_width=True)
+with col2:
+    with st.expander("Year-to-Year Progress"):
+        if not df.empty:
+            df_yearly = df_pivot.groupby('year')['Sean_Kim'].last().reset_index()
+            fig_yearly = go.Figure()
+            fig_yearly.add_trace(go.Scatter(x=df_yearly['year'], y=df_yearly['Sean_Kim'], mode='lines+markers', name='Sean + Kim'))
+            fig_yearly.update_layout(xaxis_title='Year', yaxis_title='End-of-Year Balance ($)', xaxis_tickangle=-45, hovermode='x unified', dragmode='zoom')
+            st.plotly_chart(fig_yearly, use_container_width=True)
+
+# Account Type Breakdown
+with col1:
+    with st.expander("Account Type Breakdown"):
+        if not df.empty:
+            latest_data = df[df['date'] == df['date'].max()]
+            account_breakdown = latest_data[latest_data['person'].isin(['Sean', 'Kim'])].groupby('account_type')['contribution'].sum().reset_index()
+            fig = px.pie(account_breakdown, values='contribution', names='account_type', title='Latest Month Account Breakdown (Sean + Kim)')
+            fig.update_layout(hovermode='x unified')
+            st.plotly_chart(fig, use_container_width=True)
+
+# Contribution History
+with col2:
+    with st.expander("Contribution History"):
+        if not df_contrib.empty:
+            contrib_pivot = df_contrib.pivot_table(index=df_contrib['date'].dt.strftime('%Y-%m'), columns='person', values='contribution', aggfunc='sum', fill_value=0).reset_index()
+            fig = go.Figure()
+            for person in ['Sean', 'Kim', 'Taylor']:
+                if person in contrib_pivot.columns:
+                    fig.add_trace(go.Scatter(x=contrib_pivot['date'], y=contrib_pivot[person], mode='lines+markers', name=person))
+            fig.update_layout(xaxis_title='Month', yaxis_title='Contributions ($)', xaxis_tickangle=-45, hovermode='x unified')
+            st.plotly_chart(fig, use_container_width=True)
 
 # Export Data
 if not df.empty:
