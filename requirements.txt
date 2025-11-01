@@ -1,7 +1,7 @@
 plotly>=5.0.0
-streamlit>=1.0.0
-pandas>=1.0.0
 numpy>=1.0.0
 statsmodels>=0.12.0
 python-dateutil>=2.8.0
-squlalchemy
+streamlit==1.39.0
+pandas==2.2.2
+sqlalchemy==2.0.32
