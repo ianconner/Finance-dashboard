@@ -1,8 +1,7 @@
 import streamlit as st
 import pandas as pd
 from sqlalchemy import create_engine, Column, Integer, String, Float, Date, text
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import declarative_base, sessionmaker  # New import to fix warning!
 from pathlib import Path
 import os
 
@@ -28,7 +27,13 @@ class Entry(Base):
     account_type= Column(String(50), nullable=False)
     value       = Column(Float, nullable=False)
 
-Base.metadata.create_all(engine)
+# Build the table only if it doesn't exist (fixes the crash!)
+try:
+    Base.metadata.create_all(engine)
+except Exception as e:
+    if "table entries already exists" not in str(e):
+        raise  # Only ignore if it's the "already exists" error
+
 Session = sessionmaker(bind=engine)
 
 def get_session():
@@ -138,9 +143,3 @@ def main_page():
             sess.close()
             st.success("Deleted!")
             st.experimental_rerun()
-
-# Tiny wake-up line – forces a rebuild so Streamlit sees the change
-st.write("App ready – Python 3.12 will be used thanks to runtime.txt")
-
-if __name__ == "__main__":
-    main_page()
