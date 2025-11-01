@@ -30,6 +30,7 @@ class Entry(Base):
 
 Base.metadata.create_all(engine)
 Session = sessionmaker(bind=engine)
+
 def get_session():
     return Session()
 
@@ -52,7 +53,8 @@ def unique_accounts(person: str):
     with engine.connect() as conn:
         res = conn.execute(sql, {"p": person}).fetchall()
     return [row[0] for row in res] if res else []
-  def add_monthly_update():
+
+def add_monthly_update():
     st.subheader("Add Monthly Update")
 
     # ---- 1. PERSON SELECTOR -------------------------------------------------
@@ -60,9 +62,7 @@ def unique_accounts(person: str):
     person = st.selectbox("Person", persons, key="person_selector")
 
     # ---- 2. ACCOUNT TYPE (dynamic, resets when person changes) ------------
-    # Force a fresh query *every time* the person changes
     account_options = unique_accounts(person)
-    # If the person has no entries yet, give a sensible default
     if not account_options:
         account_options = ["TSP", "T3W", "Stocks"] if person == "Sean" else ["Kim Total"]
         st.info(f"No prior entries for **{person}**. Using defaults – they will be saved automatically.")
@@ -83,6 +83,7 @@ def unique_accounts(person: str):
         add_entry(date, person, account_type, float(value))
         st.success(f"Saved {person} → {account_type} = ${value:,.2f} on {date}")
         st.experimental_rerun()   # refresh UI instantly
+
 def main_page():
     st.title("Personal Finance Tracker")
 
@@ -122,18 +123,24 @@ def main_page():
     # -----------------------------------------------------------------
     if not df.empty:
         st.subheader("Delete an entry")
-        to_del = st.selectbox(
+        # Build a list of ids for the selectbox
+        df_disp = df.reset_index(drop=True)
+        choice = st.selectbox(
             "Select row to delete",
-            options=df.index,
-            format_func=lambda i: f"{df.loc[i, 'date']} – {df.loc[i, 'person']} – {df.loc[i, 'account_type']} – ${df.loc[i, 'value']:,.0f}"
+            options=df_disp.index,
+            format_func=lambda i: f"{df_disp.loc[i, 'date']} – {df_disp.loc[i, 'person']} – {df_disp.loc[i, 'account_type']} – ${df_disp.loc[i, 'value']:,.0f}"
         )
         if st.button("Delete"):
+            entry_id = int(df_disp.loc[choice, "id"])
             sess = get_session()
-            sess.query(Entry).filter(Entry.id == df.loc[to_del, "id"]).delete()
+            sess.query(Entry).filter(Entry.id == entry_id).delete()
             sess.commit()
             sess.close()
             st.success("Deleted!")
             st.experimental_rerun()
+
+# Tiny wake-up line – forces a rebuild so Streamlit sees the change
+st.write("App ready – Python 3.12 will be used thanks to runtime.txt")
 
 if __name__ == "__main__":
     main_page()
