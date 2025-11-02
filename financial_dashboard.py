@@ -20,7 +20,7 @@ DEBUG = False
 
 # ---------- Database Setup ----------
 try:
-    engine = create_engine(st.secrets["postgres_url"].replace("postgres:", "postgresql+psycopg:"))
+    engine = create_engine(st.secrets["postgres_url"].replace("postgres:", "postgresql+psycopg2:"))
     Base = declarative_base()
 
     class Account(Base):
