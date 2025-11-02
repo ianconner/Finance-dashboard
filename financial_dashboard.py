@@ -20,7 +20,6 @@ DEBUG = False
 
 # ---------- Database Setup ----------
 try:
-    # Clean URI: postgres:// → postgresql+psycopg2://
     url = st.secrets["postgres_url"]
     if url.startswith("postgres://"):
         url = url.replace("postgres:", "postgresql+psycopg2:", 1)
@@ -68,12 +67,10 @@ def get_session():
     return Session()
 
 def reset_database():
-    """Drop everything and recreate with defaults."""
     try:
         sess = get_session()
         Base.metadata.drop_all(engine)
         Base.metadata.create_all(engine)
-
         defaults = {
             'Sean': ['IRA', 'Roth IRA', 'TSP', 'Personal', 'T3W'],
             'Kim': ['Retirement'],
@@ -84,8 +81,6 @@ def reset_database():
                 sess.merge(AccountConfig(person=p, account_type=t))
         sess.commit()
         sess.close()
-        if DEBUG:
-            st.write("Debug: DB reset")
     except Exception as e:
         st.error(f"Reset failed: {e}")
 
@@ -153,7 +148,6 @@ def get_contributions():
 
 # ---------- ONE-TIME CSV UPLOAD TO SEED DATABASE ----------
 def seed_database_from_csv(df_uploaded):
-    """Load CSV into Postgres (only if not already seeded)"""
     try:
         sess = get_session()
         count = sess.query(MonthlyUpdate).count()
@@ -221,20 +215,18 @@ with st.sidebar:
     if st.button("Save entry"):
         add_monthly_update(date, person, account_type, float(value))
         st.success(f"Saved {person} → {account_type} = ${value:,.2f}")
-        st.experimental_rerun()
+        st.rerun()
 
     st.subheader("Add Contribution")
     contrib_amount = st.number_input("Contribution ($)", min_value=0.0, format="%.2f", key="contrib_amt")
     if st.button("Save contribution"):
         add_contribution(date, person, account_type, float(contrib_amount))
         st.success(f"Contribution ${contrib_amount:,.2f} saved")
-        st.experimental_rerun()
+        st.rerun()
 
 # ----- Main Data Display (only if data exists) -----
 if not df.empty:
     df["date"] = pd.to_datetime(df["date"])
-
-    # Safely convert contributions only if they exist
     if not df_contrib.empty:
         df_contrib["date"] = pd.to_datetime(df_contrib["date"])
 
@@ -249,52 +241,49 @@ if not df.empty:
     st.subheader("Monthly Summary")
     st.dataframe(pivot.style.format("${:,.0f}"))
 
-    # Total Sean + Kim
-    df_total = df[df["person"].isin(["Sean", "Kim"])].groupby("date")["value"].sum().reset_index()
-    df_total = df_total.sort_values("date")
-    df_total["monthly_total"] = df_total["value"]
+    # Net Worth (Sean + Kim)
+    df_net = df[df["person"].isin(["Sean", "Kim"])].groupby("date")["value"].sum().reset_index()
+    df_net = df_net.sort_values("date")
 
-    # Growth Over Time
-    st.subheader("Growth Over Time")
-    fig = px.line(
-        df,
-        x="date",
-        y="value",
-        color="person",
-        line_group="account_type",
-        markers=True,
-        title="Account Balances Over Time",
+    st.subheader("Family Net Worth (Sean + Kim)")
+    fig_net = px.line(
+        df_net, x="date", y="value",
+        title="Family Net Worth Over Time",
+        labels={"value": "Total ($)"}
     )
-    st.plotly_chart(fig, use_container_width=True)
+    fig_net.update_layout(yaxis_tickformat="$,.0f")
+    st.plotly_chart(fig_net, use_container_width=True)
 
-    # Goal Progress
-    goal_amounts = [1_000_000, 2_000_000, 3_000_000]
-    latest_sean_kim = df_total["monthly_total"].iloc[-1] if not df_total.empty else 0
-    col1, col2 = st.columns(2)
+    # Goal Tracker
+    st.subheader("Financial Goals")
+    goals = [
+        {"name": "Millionaire", "target": 1_000_000, "by": "2030"},
+        {"name": "Retirement Ready", "target": 2_000_000, "by": "2035"},
+        {"name": "Legacy Fund", "target": 3_000_000, "by": "2040"}
+    ]
+    current = df_net["value"].iloc[-1] if not df_net.empty else 0
 
-    with col1:
-        with st.expander("Goal Progress"):
-            if latest_sean_kim > 0:
-                progress = min(latest_sean_kim / goal_amounts[0], 1.0)
-                st.progress(progress)
-                st.write(f"Current: ${latest_sean_kim:,.0f} / ${goal_amounts[0]:,.0f} ({progress*100:.1f}%)")
-            else:
-                st.write("No data yet.")
+    for g in goals:
+        progress = min(current / g["target"], 1.0)
+        st.progress(progress)
+        st.write(f"**{g['name']}**: ${current:,.0f} / ${g['target']:,.0f} ({progress*100:.1f}%) → {g['by']}")
 
-    # Monte-Carlo
-    with col2:
-        with st.expander("Monte-Carlo 2042 Projection"):
-            if len(df_total) > 1:
-                returns = df_total["monthly_total"].pct_change().dropna()
-                mu = returns.mean()
-                sigma = returns.std()
-                years = 2042 - datetime.now().year
-                simulations = np.random.normal(mu, sigma, (10000, years * 12))
-                paths = latest_sean_kim * (1 + simulations).cumprod(axis=1)[:, -1]
-                p25, p50, p75 = np.percentile(paths, [25, 50, 75])
-                st.write(f"25th: ${p25:,.0f} | Median: ${p50:,.0f} | 75th: ${p75:,.0f}")
-                fig_mc = px.histogram(paths, nbins=50, title="2042 Distribution")
-                st.plotly_chart(fig_mc, use_container_width=True)
+    # Monthly Growth Rates
+    st.subheader("Monthly Growth Rates")
+    latest_date = df["date"].max()
+    prev_date = latest_date - pd.DateOffset(months=1)
+    latest = df[df["date"] == latest_date]
+    prev = df[df["date"] == prev_date]
+
+    if len(prev) > 0:
+        merged = latest.merge(prev, on=["person", "account_type"], suffixes=("_curr", "_prev"))
+        merged["growth"] = (merged["value_curr"] - merged["value_prev"]) / merged["value_prev"]
+        growth_df = merged[["person", "account_type", "growth"]].copy()
+        growth_df["growth"] = (growth_df["growth"] * 100).round(2)
+        growth_df = growth_df.sort_values("growth", ascending=False)
+        st.dataframe(growth_df.style.format({"growth": "{:.2f}%"}))
+    else:
+        st.info("Not enough data for growth rates (need 2+ months)")
 
     # Delete Entry
     st.subheader("Delete an Entry")
@@ -313,7 +302,7 @@ if not df.empty:
         sess.commit()
         sess.close()
         st.success("Deleted!")
-        st.experimental_rerun()
+        st.rerun()
 
     # Export
     csv_vals = df.to_csv(index=False).encode()
@@ -326,4 +315,4 @@ if not df.empty:
 with st.sidebar:
     if st.button("Reset & Re-Seed (Admin Only)"):
         reset_database()
-        st.experimental_rerun()
+        st.rerun()
