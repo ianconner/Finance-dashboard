@@ -193,7 +193,7 @@ if df.empty:
             if all(col in df_upload.columns for col in expected_cols):
                 if st.button("Import CSV to Database"):
                     seed_database_from_csv(df_upload)
-                    st.experimental_rerun()
+                    st.rerun()
             else:
                 st.error(f"CSV must have columns: {expected_cols}")
         except Exception as e:
