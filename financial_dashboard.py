@@ -233,7 +233,10 @@ with st.sidebar:
 # ----- Main Data Display (only if data exists) -----
 if not df.empty:
     df["date"] = pd.to_datetime(df["date"])
-    df_contrib["date"] = pd.to_datetime(df_contrib["date"])
+
+    # Safely convert contributions only if they exist
+    if not df_contrib.empty:
+        df_contrib["date"] = pd.to_datetime(df_contrib["date"])
 
     # Pivot for wide view
     pivot = df.pivot_table(
