@@ -7,6 +7,12 @@ from datetime import datetime
 from dateutil.relativedelta import relativedelta
 import re
 
+# AI/ML imports
+from statsmodels.tsa.arima.model import ARIMA
+from sklearn.linear_model import LinearRegression
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.metrics import mean_absolute_error
+
 # ---------- SQLAlchemy (persistent DB) ----------
 from sqlalchemy import (
     create_engine, Column, Integer, String, Float, Date, text,
@@ -168,6 +174,39 @@ def seed_database_from_csv(df_uploaded):
     except Exception as e:
         st.error(f"Seed failed: {e}")
 
+# ---------- AI ANALYTICS: Growth Projections ----------
+def ai_projections(df_net, horizon=24):
+    """AI models for future growth"""
+    if len(df_net) < 3:
+        return None, None, None, None
+    
+    # Prepare data
+    df_net['time_idx'] = range(len(df_net))
+    y = df_net['value'].values
+    X = df_net['time_idx'].values.reshape(-1, 1)
+    
+    # ARIMA
+    try:
+        arima_model = ARIMA(y, order=(1,1,1))
+        arima_fitted = arima_model.fit()
+        arima_forecast = arima_fitted.forecast(steps=horizon)
+        arima_ci = arima_fitted.get_forecast(steps=horizon).conf_int()
+    except:
+        arima_forecast = np.full(horizon, y[-1])
+        arima_ci = np.full((horizon, 2), [y[-1]*0.9, y[-1]*1.1])
+    
+    # Linear Regression
+    lr = LinearRegression().fit(X, y)
+    future_x = np.array(range(len(df_net), len(df_net) + horizon)).reshape(-1, 1)
+    lr_pred = lr.predict(future_x)
+    
+    # Random Forest
+    rf = RandomForestRegressor(n_estimators=50, random_state=42)
+    rf.fit(X, y)
+    rf_pred = rf.predict(future_x)
+    
+    return arima_forecast, arima_ci, lr_pred, rf_pred
+
 # ---------- UI Starts Here ----------
 st.set_page_config(page_title="Finance Dashboard", layout="wide")
 st.title("Personal Finance Tracker")
@@ -176,10 +215,10 @@ st.title("Personal Finance Tracker")
 df = get_monthly_updates()
 df_contrib = get_contributions()
 
-# ----- ONE-TIME CSV SEED (only if empty) -----
+# ----- ONE-TIME CSV SEED -----
 if df.empty:
     st.subheader("Seed Database with CSV (One-Time Setup)")
-    uploaded_file = st.file_uploader("Upload your old CSV (e.g. combined_finances_all.csv)", type="csv")
+    uploaded_file = st.file_uploader("Upload your old CSV", type="csv")
     if uploaded_file is not None:
         try:
             df_upload = pd.read_csv(uploaded_file)
@@ -193,7 +232,7 @@ if df.empty:
         except Exception as e:
             st.error(f"Error reading CSV: {e}")
 
-# ----- Sidebar: Add Monthly Update -----
+# ----- Sidebar -----
 with st.sidebar:
     st.subheader("Add Monthly Update")
     accounts_dict = load_accounts()
@@ -217,20 +256,18 @@ with st.sidebar:
         st.success(f"Saved {person} → {account_type} = ${value:,.2f}")
         st.rerun()
 
-    st.subheader("Add Contribution")
-    contrib_amount = st.number_input("Contribution ($)", min_value=0.0, format="%.2f", key="contrib_amt")
-    if st.button("Save contribution"):
-        add_contribution(date, person, account_type, float(contrib_amount))
-        st.success(f"Contribution ${contrib_amount:,.2f} saved")
+    # Admin
+    if st.button("Reset & Re-Seed (Admin Only)"):
+        reset_database()
         st.rerun()
 
-# ----- Main Data Display (only if data exists) -----
+# ----- Main Data Display -----
 if not df.empty:
     df["date"] = pd.to_datetime(df["date"])
     if not df_contrib.empty:
         df_contrib["date"] = pd.to_datetime(df_contrib["date"])
 
-    # Pivot for wide view
+    # Pivot
     pivot = df.pivot_table(
         index="date",
         columns=["person", "account_type"],
@@ -241,20 +278,54 @@ if not df.empty:
     st.subheader("Monthly Summary")
     st.dataframe(pivot.style.format("${:,.0f}"))
 
-    # Net Worth (Sean + Kim)
+    # Net Worth Chart
     df_net = df[df["person"].isin(["Sean", "Kim"])].groupby("date")["value"].sum().reset_index()
     df_net = df_net.sort_values("date")
-
-    st.subheader("Family Net Worth (Sean + Kim)")
     fig_net = px.line(
         df_net, x="date", y="value",
-        title="Family Net Worth Over Time",
+        title="Family Net Worth (Sean + Kim)",
         labels={"value": "Total ($)"}
     )
     fig_net.update_layout(yaxis_tickformat="$,.0f")
     st.plotly_chart(fig_net, use_container_width=True)
 
-    # Goal Tracker
+    # AI Projections
+    st.subheader("AI Growth Projections")
+    horizon = st.slider("Forecast Horizon (months)", 12, 60, 24)
+    arima_f, arima_ci, lr_f, rf_f = ai_projections(df_net, horizon)
+    
+    if arima_f is not None:
+        future_dates = pd.date_range(start=df_net["date"].max() + pd.DateOffset(months=1), periods=horizon, freq='MS')
+        
+        fig_proj = go.Figure()
+        fig_proj.add_trace(go.Scatter(x=df_net["date"], y=df_net["value"], name="Historical", line=dict(color='blue')))
+        
+        # ARIMA
+        fig_proj.add_trace(go.Scatter(x=future_dates, y=arima_f, name="ARIMA Forecast", line=dict(color='green')))
+        fig_proj.add_trace(go.Scatter(x=future_dates, y=arima_ci['lower MonthlyUpdate'], fill=None, mode='lines', line=dict(color='green', dash='dash'), showlegend=False))
+        fig_proj.add_trace(go.Scatter(x=future_dates, y=arima_ci['upper MonthlyUpdate'], fill='tonexty', mode='lines', line=dict(color='green'), name='ARIMA CI'))
+        
+        # Linear
+        fig_proj.add_trace(go.Scatter(x=future_dates, y=lr_f, name="Linear Trend", line=dict(color='orange')))
+        
+        # RF
+        fig_proj.add_trace(go.Scatter(x=future_dates, y=rf_f, name="Random Forest", line=dict(color='red')))
+        
+        fig_proj.update_layout(title=f"AI Projections ({horizon} months)", yaxis_title="Net Worth ($)", xaxis_title="Date")
+        st.plotly_chart(fig_proj, use_container_width=True)
+        
+        # Summary Table
+        proj_df = pd.DataFrame({
+            'Model': ['ARIMA (Median)', 'Linear Regression', 'Random Forest'],
+            '24 Months': [arima_f[23], lr_f[23], rf_f[23]],
+            '60 Months': [arima_f[59] if len(arima_f) > 59 else np.nan, lr_f[59], rf_f[59]]
+        })
+        proj_df = proj_df.round(0).style.format({"24 Months": "${:,.0f}", "60 Months": "${:,.0f}"})
+        st.dataframe(proj_df)
+    else:
+        st.info("Need 3+ months of data for projections.")
+
+    # Goals
     st.subheader("Financial Goals")
     goals = [
         {"name": "Millionaire", "target": 1_000_000, "by": "2030"},
@@ -268,7 +339,7 @@ if not df.empty:
         st.progress(progress)
         st.write(f"**{g['name']}**: ${current:,.0f} / ${g['target']:,.0f} ({progress*100:.1f}%) → {g['by']}")
 
-    # Monthly Growth Rates
+    # Growth Rates
     st.subheader("Monthly Growth Rates")
     latest_date = df["date"].max()
     prev_date = latest_date - pd.DateOffset(months=1)
@@ -310,9 +381,3 @@ if not df.empty:
     if not df_contrib.empty:
         csv_cont = df_contrib.to_csv(index=False).encode()
         st.download_button("Export Contributions CSV", csv_cont, "contributions.csv", "text/csv")
-
-# ----- Admin Reset (optional) -----
-with st.sidebar:
-    if st.button("Reset & Re-Seed (Admin Only)"):
-        reset_database()
-        st.rerun()
