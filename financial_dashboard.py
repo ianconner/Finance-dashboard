@@ -20,7 +20,11 @@ DEBUG = False
 
 # ---------- Database Setup ----------
 try:
-    engine = create_engine(st.secrets["postgres_url"].replace("postgres:", "postgresql+psycopg2:"))
+    # Clean URI: postgres:// → postgresql+psycopg2://
+    url = st.secrets["postgres_url"]
+    if url.startswith("postgres://"):
+        url = url.replace("postgres:", "postgresql+psycopg2:", 1)
+    engine = create_engine(url)
     Base = declarative_base()
 
     class Account(Base):
@@ -101,46 +105,6 @@ def load_accounts():
         st.error(f"Load accounts error: {e}")
         return {}
 
-def add_person(name):
-    try:
-        sess = get_session()
-        sess.merge(AccountConfig(person=name, account_type='Default'))
-        sess.commit()
-        sess.close()
-    except Exception as e:
-        st.error(f"Add person error: {e}")
-
-def add_account_type(person, acc_type):
-    try:
-        sess = get_session()
-        sess.merge(AccountConfig(person=person, account_type=acc_type))
-        sess.commit()
-        sess.close()
-    except Exception as e:
-        st.error(f"Add account error: {e}")
-
-def delete_account_type(person, acc_type):
-    try:
-        sess = get_session()
-        sess.query(AccountConfig).filter_by(person=person, account_type=acc_type).delete()
-        sess.query(MonthlyUpdate).filter_by(person=person, account_type=acc_type).delete()
-        sess.query(Contribution).filter_by(person=person, account_type=acc_type).delete()
-        sess.commit()
-        sess.close()
-    except Exception as e:
-        st.error(f"Delete account error: {e}")
-
-def delete_person(person):
-    try:
-        sess = get_session()
-        sess.query(AccountConfig).filter_by(person=person).delete()
-        sess.query(MonthlyUpdate).filter_by(person=person).delete()
-        sess.query(Contribution).filter_by(person=person).delete()
-        sess.commit()
-        sess.close()
-    except Exception as e:
-        st.error(f"Delete person error: {e}")
-
 def add_monthly_update(date, person, acc_type, value):
     try:
         sess = get_session()
@@ -187,9 +151,53 @@ def get_contributions():
         st.error(f"Get contributions error: {e}")
         return pd.DataFrame()
 
+# ---------- ONE-TIME CSV UPLOAD TO SEED DATABASE ----------
+def seed_database_from_csv(df_uploaded):
+    """Load CSV into Postgres (only if not already seeded)"""
+    try:
+        sess = get_session()
+        count = sess.query(MonthlyUpdate).count()
+        if count > 0:
+            st.info("Database already has data — skipping seed.")
+            return
+        
+        for _, row in df_uploaded.iterrows():
+            date = pd.to_datetime(row['date']).date()
+            person = str(row['person'])
+            account_type = str(row['account_type'])
+            value = float(row['value'])
+            sess.merge(MonthlyUpdate(date=date, person=person, account_type=account_type, value=value))
+        
+        sess.commit()
+        sess.close()
+        st.success(f"Seeded {len(df_uploaded)} rows into database!")
+    except Exception as e:
+        st.error(f"Seed failed: {e}")
+
 # ---------- UI Starts Here ----------
 st.set_page_config(page_title="Finance Dashboard", layout="wide")
 st.title("Personal Finance Tracker")
+
+# Load data
+df = get_monthly_updates()
+df_contrib = get_contributions()
+
+# ----- ONE-TIME CSV SEED (only if empty) -----
+if df.empty:
+    st.subheader("Seed Database with CSV (One-Time Setup)")
+    uploaded_file = st.file_uploader("Upload your old CSV (e.g. combined_finances_all.csv)", type="csv")
+    if uploaded_file is not None:
+        try:
+            df_upload = pd.read_csv(uploaded_file)
+            expected_cols = ['date', 'person', 'account_type', 'value']
+            if all(col in df_upload.columns for col in expected_cols):
+                if st.button("Import CSV to Database"):
+                    seed_database_from_csv(df_upload)
+                    st.experimental_rerun()
+            else:
+                st.error(f"CSV must have columns: {expected_cols}")
+        except Exception as e:
+            st.error(f"Error reading CSV: {e}")
 
 # ----- Sidebar: Add Monthly Update -----
 with st.sidebar:
@@ -222,17 +230,12 @@ with st.sidebar:
         st.success(f"Contribution ${contrib_amount:,.2f} saved")
         st.experimental_rerun()
 
-# ----- Main Data -----
-df = get_monthly_updates()
-df_contrib = get_contributions()
-
-if df.empty:
-    st.info("No data yet – add an entry on the left.")
-else:
+# ----- Main Data Display (only if data exists) -----
+if not df.empty:
     df["date"] = pd.to_datetime(df["date"])
     df_contrib["date"] = pd.to_datetime(df_contrib["date"])
 
-    # ----- Pivot for wide view -----
+    # Pivot for wide view
     pivot = df.pivot_table(
         index="date",
         columns=["person", "account_type"],
@@ -243,12 +246,12 @@ else:
     st.subheader("Monthly Summary")
     st.dataframe(pivot.style.format("${:,.0f}"))
 
-    # ----- Total Sean + Kim -----
+    # Total Sean + Kim
     df_total = df[df["person"].isin(["Sean", "Kim"])].groupby("date")["value"].sum().reset_index()
     df_total = df_total.sort_values("date")
     df_total["monthly_total"] = df_total["value"]
 
-    # ----- Growth Over Time -----
+    # Growth Over Time
     st.subheader("Growth Over Time")
     fig = px.line(
         df,
@@ -261,7 +264,7 @@ else:
     )
     st.plotly_chart(fig, use_container_width=True)
 
-    # ----- Goal Progress (example $1M, $2M, $3M) -----
+    # Goal Progress
     goal_amounts = [1_000_000, 2_000_000, 3_000_000]
     latest_sean_kim = df_total["monthly_total"].iloc[-1] if not df_total.empty else 0
     col1, col2 = st.columns(2)
@@ -275,7 +278,7 @@ else:
             else:
                 st.write("No data yet.")
 
-    # ----- Monte-Carlo (simple) -----
+    # Monte-Carlo
     with col2:
         with st.expander("Monte-Carlo 2042 Projection"):
             if len(df_total) > 1:
@@ -290,7 +293,7 @@ else:
                 fig_mc = px.histogram(paths, nbins=50, title="2042 Distribution")
                 st.plotly_chart(fig_mc, use_container_width=True)
 
-    # ----- Delete Entry -----
+    # Delete Entry
     st.subheader("Delete an Entry")
     df_disp = df.reset_index(drop=True)
     choice = st.selectbox(
@@ -309,9 +312,15 @@ else:
         st.success("Deleted!")
         st.experimental_rerun()
 
-    # ----- Export -----
+    # Export
     csv_vals = df.to_csv(index=False).encode()
     st.download_button("Export Values CSV", csv_vals, "values.csv", "text/csv")
     if not df_contrib.empty:
         csv_cont = df_contrib.to_csv(index=False).encode()
         st.download_button("Export Contributions CSV", csv_cont, "contributions.csv", "text/csv")
+
+# ----- Admin Reset (optional) -----
+with st.sidebar:
+    if st.button("Reset & Re-Seed (Admin Only)"):
+        reset_database()
+        st.experimental_rerun()
