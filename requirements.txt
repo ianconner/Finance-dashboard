@@ -5,3 +5,4 @@ statsmodels==0.14.3
 python-dateutil==2.9.0.post0
 sqlalchemy==2.0.35
 psycopg2-binary==2.9.11
+scikit-learn==1.5.1
