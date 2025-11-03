@@ -11,18 +11,14 @@ import re
 from statsmodels.tsa.arima.model import ARIMA
 from sklearn.linear_model import LinearRegression
 from sklearn.ensemble import RandomForestRegressor
-from sklearn.metrics import mean_absolute_error
 
 # ---------- SQLAlchemy (persistent DB) ----------
 from sqlalchemy import (
-    create_engine, Column, Integer, String, Float, Date, text,
+    create_engine, Column, String, Float, Date, text,
     PrimaryKeyConstraint
 )
 from sqlalchemy.orm import declarative_base, sessionmaker
 from sqlalchemy.exc import SQLAlchemyError
-
-# ---------- Debug ----------
-DEBUG = False
 
 # ---------- Database Setup ----------
 try:
@@ -31,14 +27,6 @@ try:
         url = url.replace("postgres:", "postgresql+psycopg2:", 1)
     engine = create_engine(url)
     Base = declarative_base()
-
-    class Account(Base):
-        __tablename__ = "accounts"
-        person = Column(String, primary_key=True)
-        account_type = Column(String, primary_key=True)
-        initial_value = Column(Float)
-        start_date = Column(Date)
-        __table_args__ = (PrimaryKeyConstraint('person', 'account_type'),)
 
     class MonthlyUpdate(Base):
         __tablename__ = "monthly_updates"
@@ -105,6 +93,18 @@ def load_accounts():
     except Exception as e:
         st.error(f"Load accounts error: {e}")
         return {}
+
+def add_person(person_name):
+    sess = get_session()
+    sess.merge(AccountConfig(person=person_name, account_type="Personal"))
+    sess.commit()
+    sess.close()
+
+def add_account_type(person_name, acct_type):
+    sess = get_session()
+    sess.merge(AccountConfig(person=person_name, account_type=acct_type))
+    sess.commit()
+    sess.close()
 
 def add_monthly_update(date, person, acc_type, value):
     try:
@@ -176,11 +176,9 @@ def seed_database_from_csv(df_uploaded):
 
 # ---------- AI ANALYTICS: Growth Projections ----------
 def ai_projections(df_net, horizon=24):
-    """AI models for future growth"""
     if len(df_net) < 3:
-        return None, None, None, None
+        return None, None, None, None, None
     
-    # Prepare data
     df_net['time_idx'] = range(len(df_net))
     y = df_net['value'].values
     X = df_net['time_idx'].values.reshape(-1, 1)
@@ -210,41 +208,6 @@ def ai_projections(df_net, horizon=24):
     
     return arima_forecast, arima_lower, arima_upper, lr_pred, rf_pred
 
-# ---------- UI for AI Projections ----------
-st.subheader("AI Growth Projections")
-horizon = st.slider("Forecast Horizon (months)", 12, 60, 24)
-arima_f, arima_lower, arima_upper, lr_f, rf_f = ai_projections(df_net, horizon)
-
-if arima_f is not None:
-    future_dates = pd.date_range(start=df_net["date"].max() + pd.DateOffset(months=1), periods=horizon, freq='MS')
-    
-    fig_proj = go.Figure()
-    fig_proj.add_trace(go.Scatter(x=df_net["date"], y=df_net["value"], name="Historical", line=dict(color='blue')))
-    
-    # ARIMA
-    fig_proj.add_trace(go.Scatter(x=future_dates, y=arima_f, name="ARIMA Forecast", line=dict(color='green')))
-    fig_proj.add_trace(go.Scatter(x=future_dates, y=arima_lower, fill=None, mode='lines', line=dict(color='green', dash='dash'), showlegend=False))
-    fig_proj.add_trace(go.Scatter(x=future_dates, y=arima_upper, fill='tonexty', mode='lines', line=dict(color='green'), name='ARIMA CI'))
-    
-    # Linear
-    fig_proj.add_trace(go.Scatter(x=future_dates, y=lr_f, name="Linear Trend", line=dict(color='orange')))
-    
-    # RF
-    fig_proj.add_trace(go.Scatter(x=future_dates, y=rf_f, name="Random Forest", line=dict(color='red')))
-    
-    fig_proj.update_layout(title=f"AI Projections ({horizon} months)", yaxis_title="Net Worth ($)", xaxis_title="Date")
-    st.plotly_chart(fig_proj, use_container_width=True)
-    
-    # Summary Table
-    proj_df = pd.DataFrame({
-        'Model': ['ARIMA (Median)', 'Linear Regression', 'Random Forest'],
-        '24 Months': [arima_f[23] if len(arima_f) > 23 else np.nan, lr_f[23], rf_f[23]],
-        '60 Months': [arima_f[59] if len(arima_f) > 59 else np.nan, lr_f[59], rf_f[59]]
-    })
-    proj_df = proj_df.round(0).style.format({"24 Months": "${:,.0f}", "60 Months": "${:,.0f}"})
-    st.dataframe(proj_df)
-else:
-    st.info("Need 3+ months of data for projections.")
 # ---------- UI Starts Here ----------
 st.set_page_config(page_title="Finance Dashboard", layout="wide")
 st.title("Personal Finance Tracker")
@@ -294,6 +257,36 @@ with st.sidebar:
         st.success(f"Saved {person} → {account_type} = ${value:,.2f}")
         st.rerun()
 
+    st.subheader("Add Contribution")
+    contrib_amount = st.number_input("Contribution ($)", min_value=0.0, format="%.2f", key="contrib_amt")
+    if st.button("Save contribution"):
+        add_contribution(date, person, account_type, float(contrib_amount))
+        st.success(f"Contribution ${contrib_amount:,.2f} saved")
+        st.rerun()
+
+    # ----- Add New Person -----
+    st.subheader("Add New Person")
+    new_person = st.text_input("New Person Name")
+    if st.button("Add Person"):
+        if new_person.strip():
+            add_person(new_person.strip())
+            st.success(f"Added {new_person.strip()}!")
+            st.rerun()
+        else:
+            st.error("Enter a name")
+
+    # ----- Add New Account Type -----
+    st.subheader("Add New Account Type")
+    new_acct_person = st.selectbox("For Person", persons, key="new_acct_person")
+    new_acct_type = st.text_input("New Account Type")
+    if st.button("Add Account Type"):
+        if new_acct_type.strip():
+            add_account_type(new_acct_person, new_acct_type.strip())
+            st.success(f"Added {new_acct_type.strip()} for {new_acct_person}!")
+            st.rerun()
+        else:
+            st.error("Enter an account type")
+
     # Admin
     if st.button("Reset & Re-Seed (Admin Only)"):
         reset_database()
@@ -330,7 +323,7 @@ if not df.empty:
     # AI Projections
     st.subheader("AI Growth Projections")
     horizon = st.slider("Forecast Horizon (months)", 12, 60, 24)
-    arima_f, arima_ci, lr_f, rf_f = ai_projections(df_net, horizon)
+    arima_f, arima_lower, arima_upper, lr_f, rf_f = ai_projections(df_net, horizon)
     
     if arima_f is not None:
         future_dates = pd.date_range(start=df_net["date"].max() + pd.DateOffset(months=1), periods=horizon, freq='MS')
@@ -340,8 +333,8 @@ if not df.empty:
         
         # ARIMA
         fig_proj.add_trace(go.Scatter(x=future_dates, y=arima_f, name="ARIMA Forecast", line=dict(color='green')))
-        fig_proj.add_trace(go.Scatter(x=future_dates, y=arima_ci['lower MonthlyUpdate'], fill=None, mode='lines', line=dict(color='green', dash='dash'), showlegend=False))
-        fig_proj.add_trace(go.Scatter(x=future_dates, y=arima_ci['upper MonthlyUpdate'], fill='tonexty', mode='lines', line=dict(color='green'), name='ARIMA CI'))
+        fig_proj.add_trace(go.Scatter(x=future_dates, y=arima_lower, fill=None, mode='lines', line=dict(color='green', dash='dash'), showlegend=False))
+        fig_proj.add_trace(go.Scatter(x=future_dates, y=arima_upper, fill='tonexty', mode='lines', line=dict(color='green'), name='ARIMA CI'))
         
         # Linear
         fig_proj.add_trace(go.Scatter(x=future_dates, y=lr_f, name="Linear Trend", line=dict(color='orange')))
@@ -355,7 +348,7 @@ if not df.empty:
         # Summary Table
         proj_df = pd.DataFrame({
             'Model': ['ARIMA (Median)', 'Linear Regression', 'Random Forest'],
-            '24 Months': [arima_f[23], lr_f[23], rf_f[23]],
+            '24 Months': [arima_f[23] if len(arima_f) > 23 else np.nan, lr_f[23], rf_f[23]],
             '60 Months': [arima_f[59] if len(arima_f) > 59 else np.nan, lr_f[59], rf_f[59]]
         })
         proj_df = proj_df.round(0).style.format({"24 Months": "${:,.0f}", "60 Months": "${:,.0f}"})
@@ -416,12 +409,12 @@ if not df.empty:
     # Export
     csv_vals = df.to_csv(index=False).encode()
     st.download_button("Export Values CSV", csv_vals, "values.csv", "text/csv")
+    if not df_contrib.empty:
+        csv_cont = df_contrib.to_csv(index=False).encode()
+        st.download_button("Export Contributions CSV", csv_cont, "contributions.csv", "text/csv")
 
-    # ===== RENDER: Use dynamic port =====
+# ===== RENDER: Use dynamic port =====
 import os
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8501))
     st.run_server(port=port, host="0.0.0.0")
-    if not df_contrib.empty:
-        csv_cont = df_contrib.to_csv(index=False).encode()
-        st.download_button("Export Contributions CSV", csv_cont, "contributions.csv", "text/csv")
