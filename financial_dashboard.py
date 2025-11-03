@@ -50,6 +50,12 @@ try:
         contribution = Column(Float)
         __table_args__ = (PrimaryKeyConstraint('date', 'person', 'account_type'),)
 
+    class Goal(Base):
+        __tablename__ = "goals"
+        name = Column(String, primary_key=True)
+        target = Column(Float)
+        by_year = Column(Integer)
+
     Base.metadata.create_all(engine)
     Session = sessionmaker(bind=engine)
 except Exception as e:
@@ -139,9 +145,7 @@ def delete_person(person):
 def add_monthly_update(date, person, acc_type, value):
     try:
         sess = get_session()
-        stmt = insert(MonthlyUpdate.__table__).values(date=date, person=person, account_type=acc_type, value=value)
-        stmt = stmt.on_conflict_do_update(index_elements=['date', 'person', 'account_type'], set_={'value': value})
-        sess.execute(stmt)
+        sess.merge(MonthlyUpdate(date=date, person=person, account_type=acc_type, value=value))
         sess.commit()
         sess.close()
     except Exception as e:
@@ -150,9 +154,7 @@ def add_monthly_update(date, person, acc_type, value):
 def add_contribution(date, person, acc_type, amount):
     try:
         sess = get_session()
-        stmt = insert(Contribution.__table__).values(date=date, person=person, account_type=acc_type, contribution=amount)
-        stmt = stmt.on_conflict_do_update(index_elements=['date', 'person', 'account_type'], set_={'contribution': amount})
-        sess.execute(stmt)
+        sess.merge(Contribution(date=date, person=person, account_type=acc_type, contribution=amount))
         sess.commit()
         sess.close()
     except Exception as e:
@@ -179,7 +181,7 @@ def get_contributions():
         sess.close()
         return pd.DataFrame([
             {'date': r.date, 'person': r.person,
-             'account_type': r.account_type, 'contribution': r.contribution}
+             'account_type': r.account_type, 'contribution': r.row.contribution}
             for r in rows
         ])
     except Exception as e:
@@ -196,9 +198,11 @@ def seed_database_from_csv(df_uploaded):
             return
         
         for _, row in df_uploaded.iterrows():
-            stmt = insert(MonthlyUpdate.__table__).values(date=pd.to_datetime(row['date']).date(), person=str(row['person']), account_type=str(row['account_type']), value=float(row['value']))
-            stmt = stmt.on_conflict_do_nothing(index_elements=['date', 'person', 'account_type'])
-            sess.execute(stmt)
+            date = pd.to_datetime(row['date']).date()
+            person = str(row['person'])
+            account_type = str(row['account_type'])
+            value = float(row['value'])
+            sess.merge(MonthlyUpdate(date=date, person=person, account_type=account_type, value=value))
         
         sess.commit()
         sess.close()
@@ -291,7 +295,7 @@ with st.sidebar:
     st.subheader("Add Contribution")
     contrib_amount = st.number_input("Contribution ($)", min_value=0.0, format="%.2f", key="contrib_amt")
     if st.button("Save contribution"):
-        add_contribution(date, person, account_type, float(contrib_amount))
+        add_contribution(date, person, account_type, float(contribution_amount))
         st.success(f"Contribution ${contrib_amount:,.2f} saved")
         st.rerun()
 
@@ -318,6 +322,19 @@ with st.sidebar:
         else:
             st.error("Enter an account type")
 
+    # ----- Add New Goal -----
+    st.subheader("Add New Goal")
+    new_goal_name = st.text_input("Goal Name")
+    new_goal_target = st.number_input("Target Amount ($)", min_value=0.0, format="%.2f")
+    new_goal_year = st.number_input("By Year", min_value=datetime.now().year, step=1)
+    if st.button("Add Goal"):
+        if new_goal_name.strip() and new_goal_target > 0:
+            add_goal(new_goal_name.strip(), new_goal_target, new_goal_year)
+            st.success(f"Added goal: {new_goal_name.strip()}!")
+            st.rerun()
+        else:
+            st.error("Enter name and target")
+
     # Admin Reset
     if st.button("Reset & Re-Seed (Admin Only)"):
         reset_database()
@@ -340,7 +357,7 @@ if not df.empty:
     st.subheader("Monthly Summary")
     st.dataframe(pivot.style.format("${:,.0f}"))
 
-    # Net Worth Chart
+    # Net Worth Chart with Benchmark
     df_net = df[df["person"].isin(["Sean", "Kim"])].groupby("date")["value"].sum().reset_index()
     df_net = df_net.sort_values("date")
     fig_net = px.line(
@@ -349,6 +366,23 @@ if not df.empty:
         labels={"value": "Total ($)"}
     )
     fig_net.update_layout(yaxis_tickformat="$,.0f")
+
+    # Benchmark
+    benchmark = st.selectbox("Benchmark", ["S&P 500 (^GSPC)", "Dow Jones (^DJI)", "Other Ticker"])
+    if benchmark == "Other Ticker":
+        custom_ticker = st.text_input("Enter Ticker (e.g., AAPL)")
+        benchmark_ticker = custom_ticker if custom_ticker else "^GSPC"
+    else:
+        benchmark_ticker = benchmark.split(" ")[-1].strip("()")
+
+    start_date = df_net["date"].min()
+    end_date = datetime.now()
+    bench_data = yf.download(benchmark_ticker, start=start_date, end=end_date)['Adj Close']
+    bench_data = bench_data.reset_index()
+    bench_data = bench_data[(bench_data['Date'] >= start_date) & (bench_data['Date'] <= end_date)]
+    if not bench_data.empty:
+        bench_data['normalized'] = (bench_data['Adj Close'] / bench_data['Adj Close'].iloc[0]) * df_net["value"].iloc[0]
+        fig_net.add_trace(go.Scatter(x=bench_data['Date'], y=bench_data['normalized'], name=benchmark, line=dict(color='gray', dash='dot')))
     st.plotly_chart(fig_net, use_container_width=True)
 
     # AI Projections
@@ -364,7 +398,7 @@ if not df.empty:
         
         # ARIMA
         fig_proj.add_trace(go.Scatter(x=future_dates, y=arima_f, name="ARIMA Forecast", line=dict(color='green')))
-        fig_proj.add_trace(go.Scatter(x=future_dates, y=arima_lower, fill=None, mode='lines', line=dict(color='green', dash='dash'), showlegend=False))
+        fig_proj.add_trace(go.Scatter(x=future_dates, y=arima_lower, fill=None, mode='lines', line=dict(color='green', dash='dot'), showlegend=False))
         fig_proj.add_trace(go.Scatter(x=future_dates, y=arima_upper, fill='tonexty', mode='lines', line=dict(color='green'), name='ARIMA CI'))
         
         # Linear
@@ -427,7 +461,7 @@ if not df.empty:
         growth_df = growth_df.sort_values("growth", ascending=False)
         st.dataframe(growth_df.style.format({"growth": "{:.2f}%"}))
     else:
-        st.info("Need 2+ months for growth rates")
+        st.info("Not enough data for growth rates (need 2+ months)")
 
     # Delete Entry
     st.subheader("Delete an Entry")
