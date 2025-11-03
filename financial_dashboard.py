@@ -197,7 +197,7 @@ def seed_database_from_csv(df_uploaded):
         
         for _, row in df_uploaded.iterrows():
             stmt = insert(MonthlyUpdate.__table__).values(date=pd.to_datetime(row['date']).date(), person=str(row['person']), account_type=str(row['account_type']), value=float(row['value']))
-            stmt = stmt.on_conflict_do_update(index_elements=['date', 'person', 'account_type'], set_={'value': value})
+            stmt = stmt.on_conflict_do_nothing(index_elements=['date', 'person', 'account_type'])
             sess.execute(stmt)
         
         sess.commit()
@@ -216,8 +216,7 @@ def ai_projections(df_net, horizon=24):
 
     # ARIMA
     try:
-        auto_model = auto_arima(y, seasonal=False, suppress_warnings=True)
-        model = ARIMA(y, order=auto_model.order)
+        model = ARIMA(y, order=(1,1,0))
         fitted = model.fit()
         forecast = fitted.forecast(steps=horizon)
         ci = fitted.get_forecast(steps=horizon).conf_int()
@@ -428,7 +427,7 @@ if not df.empty:
         growth_df = growth_df.sort_values("growth", ascending=False)
         st.dataframe(growth_df.style.format({"growth": "{:.2f}%"}))
     else:
-        st.info("Not enough data for growth rates (need 2+ months)")
+        st.info("Need 2+ months for growth rates")
 
     # Delete Entry
     st.subheader("Delete an Entry")
