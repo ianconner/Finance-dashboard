@@ -191,9 +191,12 @@ def ai_projections(df_net, horizon=24):
         arima_fitted = arima_model.fit()
         arima_forecast = arima_fitted.forecast(steps=horizon)
         arima_ci = arima_fitted.get_forecast(steps=horizon).conf_int()
+        arima_lower = arima_ci.iloc[:, 0]
+        arima_upper = arima_ci.iloc[:, 1]
     except:
         arima_forecast = np.full(horizon, y[-1])
-        arima_ci = np.full((horizon, 2), [y[-1]*0.9, y[-1]*1.1])
+        arima_lower = np.full(horizon, y[-1]*0.9)
+        arima_upper = np.full(horizon, y[-1]*1.1)
     
     # Linear Regression
     lr = LinearRegression().fit(X, y)
@@ -205,8 +208,43 @@ def ai_projections(df_net, horizon=24):
     rf.fit(X, y)
     rf_pred = rf.predict(future_x)
     
-    return arima_forecast, arima_ci, lr_pred, rf_pred
+    return arima_forecast, arima_lower, arima_upper, lr_pred, rf_pred
 
+# ---------- UI for AI Projections ----------
+st.subheader("AI Growth Projections")
+horizon = st.slider("Forecast Horizon (months)", 12, 60, 24)
+arima_f, arima_lower, arima_upper, lr_f, rf_f = ai_projections(df_net, horizon)
+
+if arima_f is not None:
+    future_dates = pd.date_range(start=df_net["date"].max() + pd.DateOffset(months=1), periods=horizon, freq='MS')
+    
+    fig_proj = go.Figure()
+    fig_proj.add_trace(go.Scatter(x=df_net["date"], y=df_net["value"], name="Historical", line=dict(color='blue')))
+    
+    # ARIMA
+    fig_proj.add_trace(go.Scatter(x=future_dates, y=arima_f, name="ARIMA Forecast", line=dict(color='green')))
+    fig_proj.add_trace(go.Scatter(x=future_dates, y=arima_lower, fill=None, mode='lines', line=dict(color='green', dash='dash'), showlegend=False))
+    fig_proj.add_trace(go.Scatter(x=future_dates, y=arima_upper, fill='tonexty', mode='lines', line=dict(color='green'), name='ARIMA CI'))
+    
+    # Linear
+    fig_proj.add_trace(go.Scatter(x=future_dates, y=lr_f, name="Linear Trend", line=dict(color='orange')))
+    
+    # RF
+    fig_proj.add_trace(go.Scatter(x=future_dates, y=rf_f, name="Random Forest", line=dict(color='red')))
+    
+    fig_proj.update_layout(title=f"AI Projections ({horizon} months)", yaxis_title="Net Worth ($)", xaxis_title="Date")
+    st.plotly_chart(fig_proj, use_container_width=True)
+    
+    # Summary Table
+    proj_df = pd.DataFrame({
+        'Model': ['ARIMA (Median)', 'Linear Regression', 'Random Forest'],
+        '24 Months': [arima_f[23] if len(arima_f) > 23 else np.nan, lr_f[23], rf_f[23]],
+        '60 Months': [arima_f[59] if len(arima_f) > 59 else np.nan, lr_f[59], rf_f[59]]
+    })
+    proj_df = proj_df.round(0).style.format({"24 Months": "${:,.0f}", "60 Months": "${:,.0f}"})
+    st.dataframe(proj_df)
+else:
+    st.info("Need 3+ months of data for projections.")
 # ---------- UI Starts Here ----------
 st.set_page_config(page_title="Finance Dashboard", layout="wide")
 st.title("Personal Finance Tracker")
