@@ -6,6 +6,7 @@ import plotly.graph_objects as go
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
 import re
+import yfinance as yf  # Added for benchmarks
 
 # AI/ML imports
 from statsmodels.tsa.arima.model import ARIMA
@@ -18,7 +19,8 @@ from sqlalchemy import (
     PrimaryKeyConstraint
 )
 from sqlalchemy.orm import declarative_base, sessionmaker
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import SQLAlchemyError, IntegrityError
+from sqlalchemy.dialects.postgresql import insert
 
 # ---------- Database Setup ----------
 try:
@@ -61,6 +63,7 @@ try:
 except Exception as e:
     st.error(f"Failed to connect to database: {e}")
     st.stop()
+
 # ---------- Helper DB Functions ----------
 def get_session():
     return Session()
@@ -144,7 +147,9 @@ def delete_person(person):
 def add_monthly_update(date, person, acc_type, value):
     try:
         sess = get_session()
-        sess.merge(MonthlyUpdate(date=date, person=person, account_type=acc_type, value=value))
+        stmt = insert(MonthlyUpdate.__table__).values(date=date, person=person, account_type=acc_type, value=value)
+        stmt = stmt.on_conflict_do_update(index_elements=['date', 'person', 'account_type'], set_={'value': value})
+        sess.execute(stmt)
         sess.commit()
         sess.close()
     except Exception as e:
@@ -153,7 +158,9 @@ def add_monthly_update(date, person, acc_type, value):
 def add_contribution(date, person, acc_type, amount):
     try:
         sess = get_session()
-        sess.merge(Contribution(date=date, person=person, account_type=acc_type, contribution=amount))
+        stmt = insert(Contribution.__table__).values(date=date, person=person, account_type=acc_type, contribution=amount)
+        stmt = stmt.on_conflict_do_update(index_elements=['date', 'person', 'account_type'], set_={'contribution': amount})
+        sess.execute(stmt)
         sess.commit()
         sess.close()
     except Exception as e:
@@ -180,7 +187,7 @@ def get_contributions():
         sess.close()
         return pd.DataFrame([
             {'date': r.date, 'person': r.person,
-             'account_type': r.account_type, 'contribution': r.row.contribution}
+             'account_type': r.account_type, 'contribution': r.contribution}
             for r in rows
         ])
     except Exception as e:
@@ -201,7 +208,9 @@ def seed_database_from_csv(df_uploaded):
             person = str(row['person'])
             account_type = str(row['account_type'])
             value = float(row['value'])
-            sess.merge(MonthlyUpdate(date=date, person=person, account_type=account_type, value=value))
+            stmt = insert(MonthlyUpdate.__table__).values(date=date, person=person, account_type=account_type, value=value)
+            stmt = stmt.on_conflict_do_update(index_elements=['date', 'person', 'account_type'], set_={'value': value})
+            sess.execute(stmt)
         
         sess.commit()
         sess.close()
@@ -236,51 +245,10 @@ def ai_projections(df_net, horizon=24):
     lr_pred = lr.predict(future_x)
 
     # Random Forest
-    rf = RandomForestRegressor(n_estimators=50, random_state=42)
-    rf.fit(X, y)
+    rf = RandomForestRegressor(n_estimators=50, random_state=42).fit(X, y)
     rf_pred = rf.predict(future_x)
 
     return forecast, lower, upper, lr_pred, rf_pred
-
-def get_goals():
-    try:
-        sess = get_session()
-        goals = sess.query(Goal).all()
-        sess.close()
-        return goals
-    except Exception as e:
-        st.error(f"Get goals error: {e}")
-        return []
-
-def add_goal(name, target, by_year):
-    try:
-        sess = get_session()
-        sess.merge(Goal(name=name, target=target, by_year=by_year))
-        sess.commit()
-        sess.close()
-    except Exception as e:
-        st.error(f"Add goal error: {e}")
-
-def update_goal(name, target, by_year):
-    try:
-        sess = get_session()
-        goal = sess.query(Goal).filter_by(name=name).first()
-        if goal:
-            goal.target = target
-            goal.by_year = by_year
-            sess.commit()
-        sess.close()
-    except Exception as e:
-        st.error(f"Update goal error: {e}")
-
-def delete_goal(name):
-    try:
-        sess = get_session()
-        sess.query(Goal).filter_by(name=name).delete()
-        sess.commit()
-        sess.close()
-    except Exception as e:
-        st.error(f"Delete goal error: {e}")
 
 # ---------- UI Starts Here ----------
 st.set_page_config(page_title="Finance Dashboard", layout="wide")
@@ -334,7 +302,7 @@ with st.sidebar:
     st.subheader("Add Contribution")
     contrib_amount = st.number_input("Contribution ($)", min_value=0.0, format="%.2f", key="contrib_amt")
     if st.button("Save contribution"):
-        add_contribution(date, person, account_type, float(contribution_amount))
+        add_contribution(date, person, account_type, float(contrib_amount))
         st.success(f"Contribution ${contrib_amount:,.2f} saved")
         st.rerun()
 
@@ -360,19 +328,6 @@ with st.sidebar:
             st.rerun()
         else:
             st.error("Enter an account type")
-
-    # ----- Add New Goal -----
-    st.subheader("Add New Goal")
-    new_goal_name = st.text_input("Goal Name")
-    new_goal_target = st.number_input("Target Amount ($)", min_value=0.0, format="%.2f")
-    new_goal_year = st.number_input("By Year", min_value=datetime.now().year, step=1)
-    if st.button("Add Goal"):
-        if new_goal_name.strip() and new_goal_target > 0:
-            add_goal(new_goal_name.strip(), new_goal_target, new_goal_year)
-            st.success(f"Added goal: {new_goal_name.strip()}!")
-            st.rerun()
-        else:
-            st.error("Enter name and target")
 
     # Admin Reset
     if st.button("Reset & Re-Seed (Admin Only)"):
@@ -437,7 +392,7 @@ if not df.empty:
         
         # ARIMA
         fig_proj.add_trace(go.Scatter(x=future_dates, y=arima_f, name="ARIMA Forecast", line=dict(color='green')))
-        fig_proj.add_trace(go.Scatter(x=future_dates, y=arima_lower, fill=None, mode='lines', line=dict(color='green', dash='dot'), showlegend=False))
+        fig_proj.add_trace(go.Scatter(x=future_dates, y=arima_lower, fill=None, mode='lines', line=dict(color='green', dash='dash'), showlegend=False))
         fig_proj.add_trace(go.Scatter(x=future_dates, y=arima_upper, fill='tonexty', mode='lines', line=dict(color='green'), name='ARIMA CI'))
         
         # Linear
