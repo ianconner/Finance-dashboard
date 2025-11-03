@@ -378,6 +378,12 @@ if not df.empty:
     # Export
     csv_vals = df.to_csv(index=False).encode()
     st.download_button("Export Values CSV", csv_vals, "values.csv", "text/csv")
+
+    # ===== RENDER: Use dynamic port =====
+import os
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 8501))
+    st.run_server(port=port, host="0.0.0.0")
     if not df_contrib.empty:
         csv_cont = df_contrib.to_csv(index=False).encode()
         st.download_button("Export Contributions CSV", csv_cont, "contributions.csv", "text/csv")
