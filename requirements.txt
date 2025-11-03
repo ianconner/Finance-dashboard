@@ -7,3 +7,6 @@ sqlalchemy==2.0.35
 psycopg2-binary==2.9.11
 numpy==2.1.2
 scikit-learn==1.5.2
+tensorflow==2.17.0  # For LSTM
+keras==3.5.0
+pmdarima==2.0.4  # For auto_arima
