@@ -6,7 +6,7 @@ import plotly.graph_objects as go
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
 import re
-import yfinance as yf  # New for benchmarks
+import yfinance as yf
 
 # AI/ML imports
 from pmdarima import auto_arima
@@ -16,7 +16,7 @@ from sklearn.ensemble import RandomForestRegressor
 
 # ---------- SQLAlchemy (persistent DB) ----------
 from sqlalchemy import (
-    create_engine, Column, String, Float, Date, text,
+    create_engine, Column, String, Float, Date, Integer, text,
     PrimaryKeyConstraint
 )
 from sqlalchemy.orm import declarative_base, sessionmaker
@@ -69,40 +69,33 @@ def get_session():
     return Session()
 
 def reset_database():
-    try:
-        sess = get_session()
-        Base.metadata.drop_all(engine)
-        Base.metadata.create_all(engine)
-        defaults = {
-            'Sean': ['IRA', 'Roth IRA', 'TSP', 'Personal', 'T3W'],
-            'Kim': ['Retirement'],
-            'Taylor': ['Personal']
-        }
-        for p, types in defaults.items():
-            for t in types:
-                sess.merge(AccountConfig(person=p, account_type=t))
-        sess.commit()
-        sess.close()
-    except Exception as e:
-        st.error(f"Reset failed: {e}")
+    sess = get_session()
+    Base.metadata.drop_all(engine)
+    Base.metadata.create_all(engine)
+    defaults = {
+        'Sean': ['IRA', 'Roth IRA', 'TSP', 'Personal', 'T3W'],
+        'Kim': ['Retirement'],
+        'Taylor': ['Personal']
+    }
+    for p, types in defaults.items():
+        for t in types:
+            sess.merge(AccountConfig(person=p, account_type=t))
+    sess.commit()
+    sess.close()
 
 def load_accounts():
-    try:
-        sess = get_session()
-        cfg = sess.query(AccountConfig).all()
-        accounts = {}
-        for row in cfg:
-            if row.person not in accounts:
-                accounts[row.person] = []
-            accounts[row.person].append(row.account_type)
-        sess.close()
-        if not accounts:
-            reset_database()
-            return load_accounts()
-        return accounts
-    except Exception as e:
-        st.error(f"Load accounts error: {e}")
-        return {}
+    sess = get_session()
+    cfg = sess.query(AccountConfig).all()
+    accounts = {}
+    for row in cfg:
+        if row.person not in accounts:
+            accounts[row.person] = []
+        accounts[row.person].append(row.account_type)
+    sess.close()
+    if not accounts:
+        reset_database()
+        return load_accounts()
+    return accounts
 
 def add_person(name):
     sess = get_session()
@@ -165,11 +158,13 @@ def get_goals():
     sess = get_session()
     rows = sess.query(Goal).all()
     sess.close()
-    return rows
+    return [ {"name": r.name, "target": r.target, "by_year": r.by_year} for r in rows ]
 
 def add_goal(name, target, by_year):
     sess = get_session()
-    sess.merge(Goal(name=name, target=target, by_year=by_year))
+    stmt = insert(Goal.__table__).values(name=name, target=target, by_year=by_year)
+    stmt = stmt.on_conflict_do_update(index_elements=['name'], set_={'target': target, 'by_year': by_year})
+    sess.execute(stmt)
     sess.commit()
     sess.close()
 
@@ -179,32 +174,42 @@ def delete_goal(name):
     sess.commit()
     sess.close()
 
-def update_goal(name, target, by_year):
-    sess = get_session()
-    goal = sess.query(Goal).filter_by(name=name).first()
-    if goal:
-        goal.target = target
-        goal.by_year = by_year
-        sess.commit()
-    sess.close()
+# ---------- AI ANALYTICS: Growth Projections ----------
+def ai_projections(df_net, horizon=24):
+    if len(df_net) < 3:
+        return None, None, None, None, None
+    df_net['time_idx'] = range(len(df_net))
+    y = df_net['value'].values
+    X = df_net['time_idx'].values.reshape(-1, 1)
+
+    # ARIMA
+    try:
+        auto_model = auto_arima(y, seasonal=False, suppress_warnings=True)
+        model = ARIMA(y, order=auto_model.order)
+        fitted = model.fit()
+        forecast = fitted.forecast(steps=horizon)
+        ci = fitted.get_forecast(steps=horizon).conf_int()
+        lower = ci.iloc[:, 0]
+        upper = ci.iloc[:, 1]
+    except:
+        forecast = np.full(horizon, y[-1])
+        lower = np.full(horizon, y[-1]*0.9)
+        upper = np.full(horizon, y[-1]*1.1)
+
+    # Linear Regression
+    lr = LinearRegression().fit(X, y)
+    future_x = np.array(range(len(df_net), len(df_net) + horizon)).reshape(-1, 1)
+    lr_pred = lr.predict(future_x)
+
+    # Random Forest
+    rf = RandomForestRegressor(n_estimators=50, random_state=42).fit(X, y)
+    rf_pred = rf.predict(future_x)
+
+    return forecast, lower, upper, lr_pred, rf_pred
 
 # ---------- UI Starts Here ----------
 st.set_page_config(page_title="Finance Dashboard", layout="wide")
 st.title("Personal Finance Tracker")
-
-# Dark Mode Toggle
-if 'dark_mode' not in st.session_state:
-    st.session_state.dark_mode = False
-
-if st.session_state.dark_mode:
-    st.markdown("""<style> [data-testid="stAppViewContainer"] { background-color: #1e1e1e; color: white; } </style>""", unsafe_allow_html=True)
-else:
-    st.markdown("""<style> [data-testid="stAppViewContainer"] { background-color: white; color: black; } </style>""", unsafe_allow_html=True)
-
-with st.sidebar:
-    if st.button("Toggle Dark Mode"):
-        st.session_state.dark_mode = not st.session_state.dark_mode
-        st.rerun()
 
 # Load data
 df = get_monthly_updates()
@@ -285,11 +290,11 @@ with st.sidebar:
     st.subheader("Add New Goal")
     new_goal_name = st.text_input("Goal Name")
     new_goal_target = st.number_input("Target Amount ($)", min_value=0.0, format="%.2f")
-    new_goal_year = st.number_input("By Year", min_value=datetime.now().year, max_value=2100, step=1)
+    new_goal_year = st.number_input("By Year", min_value=datetime.now().year, step=1)
     if st.button("Add Goal"):
         if new_goal_name.strip() and new_goal_target > 0:
             add_goal(new_goal_name.strip(), new_goal_target, new_goal_year)
-            st.success(f"Added goal: {new_goal_name.strip()}")
+            st.success(f"Added goal: {new_goal_name.strip()}!")
             st.rerun()
         else:
             st.error("Enter name and target")
@@ -327,15 +332,21 @@ if not df.empty:
     fig_net.update_layout(yaxis_tickformat="$,.0f")
 
     # Benchmark
-    st.subheader("Add Benchmark to Net Worth Chart")
-    benchmark = st.selectbox("Benchmark", ["S&P 500 (^GSPC)", "Dow Jones (^DJI)"])
+    benchmark = st.selectbox("Benchmark", ["S&P 500 (^GSPC)", "Dow Jones (^DJI)", "Other Ticker"])
+    if benchmark == "Other Ticker":
+        custom_ticker = st.text_input("Enter Ticker (e.g., AAPL)")
+        benchmark_ticker = custom_ticker if custom_ticker else "^GSPC"
+    else:
+        benchmark_ticker = benchmark.split(" ")[-1].strip("()")
+
     start_date = df_net["date"].min()
     end_date = datetime.now()
-    bench_data = yf.download(benchmark, start=start_date, end=end_date)['Adj Close']
+    bench_data = yf.download(benchmark_ticker, start=start_date, end=end_date)['Adj Close']
     bench_data = bench_data.reset_index()
     bench_data = bench_data[(bench_data['Date'] >= start_date) & (bench_data['Date'] <= end_date)]
-    bench_data['normalized'] = (bench_data['Adj Close'] / bench_data['Adj Close'].iloc[0]) * df_net["value"].iloc[0]
-    fig_net.add_trace(go.Scatter(x=bench_data['Date'], y=bench_data['normalized'], name=benchmark, line=dict(color='gray', dash='dot')))
+    if not bench_data.empty:
+        bench_data['normalized'] = (bench_data['Adj Close'] / bench_data['Adj Close'].iloc[0]) * df_net["value"].iloc[0]
+        fig_net.add_trace(go.Scatter(x=bench_data['Date'], y=bench_data['normalized'], name=benchmark, line=dict(color='gray', dash='dot')))
     st.plotly_chart(fig_net, use_container_width=True)
 
     # AI Projections
@@ -383,6 +394,21 @@ if not df.empty:
         progress = min(current / g.target, 1.0)
         st.progress(progress)
         st.write(f"**{g.name}**: ${current:,.0f} / ${g.target:,.0f} ({progress*100:.1f}%) → {g.by_year}")
+
+    # Edit/Delete Goals
+    st.subheader("Edit/Delete Goals")
+    for g in goals:
+        with st.expander(f"Edit {g.name}"):
+            new_target = st.number_input("New Target", value=g.target)
+            new_year = st.number_input("New Year", value=g.by_year)
+            if st.button("Update Goal", key=f"update_{g.name}"):
+                update_goal(g.name, new_target, new_year)
+                st.success("Updated!")
+                st.rerun()
+            if st.button("Delete Goal", key=f"delete_{g.name}"):
+                delete_goal(g.name)
+                st.success("Deleted!")
+                st.rerun()
 
     # Growth Rates
     st.subheader("Monthly Growth Rates")
