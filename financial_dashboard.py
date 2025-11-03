@@ -218,7 +218,7 @@ df_contrib = get_contributions()
 
 # ----- ONE-TIME CSV SEED -----
 if df.empty:
-    st.subheader("Seed Database with CSV (One-Time Setup)")
+    st.subheader("Seed Database with CSV (One-Time Setup")
     uploaded_file = st.file_uploader("Upload your old CSV", type="csv")
     if uploaded_file is not None:
         try:
@@ -309,12 +309,14 @@ if not df.empty:
     st.subheader("Monthly Summary")
     st.dataframe(pivot.style.format("${:,.0f}"))
 
-    # Net Worth Chart
+    # Net Worth (Sean + Kim)
     df_net = df[df["person"].isin(["Sean", "Kim"])].groupby("date")["value"].sum().reset_index()
     df_net = df_net.sort_values("date")
+
+    st.subheader("Family Net Worth (Sean + Kim)")
     fig_net = px.line(
         df_net, x="date", y="value",
-        title="Family Net Worth (Sean + Kim)",
+        title="Family Net Worth Over Time",
         labels={"value": "Total ($)"}
     )
     fig_net.update_layout(yaxis_tickformat="$,.0f")
@@ -348,8 +350,8 @@ if not df.empty:
         # Summary Table
         proj_df = pd.DataFrame({
             'Model': ['ARIMA (Median)', 'Linear Regression', 'Random Forest'],
-            '24 Months': [arima_f[23] if len(arima_f) > 23 else np.nan, lr_f[23], rf_f[23]],
-            '60 Months': [arima_f[59] if len(arima_f) > 59 else np.nan, lr_f[59], rf_f[59]]
+            '24 Months': [arima_f[23] if len(arima_f) > 23 else np.nan, lr_f[23] if len(lr_f) > 23 else np.nan, rf_f[23] if len(rf_f) > 23 else np.nan],
+            '60 Months': [arima_f[59] if len(arima_f) > 59 else np.nan, lr_f[59] if len(lr_f) > 59 else np.nan, rf_f[59] if len(rf_f) > 59 else np.nan]
         })
         proj_df = proj_df.round(0).style.format({"24 Months": "${:,.0f}", "60 Months": "${:,.0f}"})
         st.dataframe(proj_df)
