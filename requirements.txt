@@ -7,3 +7,4 @@ sqlalchemy==2.0.35
 psycopg2-binary==2.9.11
 numpy==2.1.2
 scikit-learn==1.5.2
+yfinance==0.2.46
