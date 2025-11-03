@@ -6,14 +6,13 @@ import plotly.graph_objects as go
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
 import re
+import yfinance as yf  # New for benchmarks
 
 # AI/ML imports
-from pmdarima import auto_arima  # New for auto ARIMA
+from pmdarima import auto_arima
 from statsmodels.tsa.arima.model import ARIMA
 from sklearn.linear_model import LinearRegression
 from sklearn.ensemble import RandomForestRegressor
-from keras.models import Sequential
-from keras.layers import LSTM, Dense
 
 # ---------- SQLAlchemy (persistent DB) ----------
 from sqlalchemy import (
@@ -53,6 +52,12 @@ try:
         contribution = Column(Float)
         __table_args__ = (PrimaryKeyConstraint('date', 'person', 'account_type'),)
 
+    class Goal(Base):
+        __tablename__ = "goals"
+        name = Column(String, primary_key=True)
+        target = Column(Float)
+        by_year = Column(Integer)
+
     Base.metadata.create_all(engine)
     Session = sessionmaker(bind=engine)
 except Exception as e:
@@ -64,33 +69,40 @@ def get_session():
     return Session()
 
 def reset_database():
-    sess = get_session()
-    Base.metadata.drop_all(engine)
-    Base.metadata.create_all(engine)
-    defaults = {
-        'Sean': ['IRA', 'Roth IRA', 'TSP', 'Personal', 'T3W'],
-        'Kim': ['Retirement'],
-        'Taylor': ['Personal']
-    }
-    for p, types in defaults.items():
-        for t in types:
-            sess.merge(AccountConfig(person=p, account_type=t))
-    sess.commit()
-    sess.close()
+    try:
+        sess = get_session()
+        Base.metadata.drop_all(engine)
+        Base.metadata.create_all(engine)
+        defaults = {
+            'Sean': ['IRA', 'Roth IRA', 'TSP', 'Personal', 'T3W'],
+            'Kim': ['Retirement'],
+            'Taylor': ['Personal']
+        }
+        for p, types in defaults.items():
+            for t in types:
+                sess.merge(AccountConfig(person=p, account_type=t))
+        sess.commit()
+        sess.close()
+    except Exception as e:
+        st.error(f"Reset failed: {e}")
 
 def load_accounts():
-    sess = get_session()
-    cfg = sess.query(AccountConfig).all()
-    accounts = {}
-    for row in cfg:
-        if row.person not in accounts:
-            accounts[row.person] = []
-        accounts[row.person].append(row.account_type)
-    sess.close()
-    if not accounts:
-        reset_database()
-        return load_accounts()
-    return accounts
+    try:
+        sess = get_session()
+        cfg = sess.query(AccountConfig).all()
+        accounts = {}
+        for row in cfg:
+            if row.person not in accounts:
+                accounts[row.person] = []
+            accounts[row.person].append(row.account_type)
+        sess.close()
+        if not accounts:
+            reset_database()
+            return load_accounts()
+        return accounts
+    except Exception as e:
+        st.error(f"Load accounts error: {e}")
+        return {}
 
 def add_person(name):
     sess = get_session()
@@ -128,7 +140,6 @@ def get_contributions():
     sess.close()
     return pd.DataFrame([{'date': r.date, 'person': r.person, 'account_type': r.account_type, 'contribution': r.contribution} for r in rows])
 
-# ---------- ONE-TIME CSV UPLOAD TO SEED DATABASE ----------
 def seed_database_from_csv(df_uploaded):
     try:
         sess = get_session()
@@ -150,62 +161,50 @@ def seed_database_from_csv(df_uploaded):
     except Exception as e:
         st.error(f"Seed failed: {e}")
 
-# ---------- AI ANALYTICS: Growth Projections ----------
-def ai_projections(df_net, horizon=24):
-    if len(df_net) < 3:
-        return None, None, None, None, None
-    df_net['time_idx'] = range(len(df_net))
-    y = df_net['value'].values
-    X = df_net['time_idx'].values.reshape(-1, 1)
+def get_goals():
+    sess = get_session()
+    rows = sess.query(Goal).all()
+    sess.close()
+    return rows
 
-    # Improved ARIMA with auto_arima
-    try:
-        auto_model = auto_arima(y, seasonal=False, suppress_warnings=True)
-        model = ARIMA(y, order=auto_model.order)
-        fitted = model.fit()
-        forecast = fitted.forecast(steps=horizon)
-        ci = fitted.get_forecast(steps=horizon).conf_int()
-        lower = ci.iloc[:, 0]
-        upper = ci.iloc[:, 1]
-    except:
-        forecast = np.full(horizon, y[-1])
-        lower = np.full(horizon, y[-1]*0.9)
-        upper = np.full(horizon, y[-1]*1.1)
+def add_goal(name, target, by_year):
+    sess = get_session()
+    sess.merge(Goal(name=name, target=target, by_year=by_year))
+    sess.commit()
+    sess.close()
 
-    # Linear Regression
-    lr = LinearRegression().fit(X, y)
-    future_x = np.array(range(len(df_net), len(df_net) + horizon)).reshape(-1, 1)
-    lr_pred = lr.predict(future_x)
+def delete_goal(name):
+    sess = get_session()
+    sess.query(Goal).filter_by(name=name).delete()
+    sess.commit()
+    sess.close()
 
-    # Random Forest
-    rf = RandomForestRegressor(n_estimators=50, random_state=42).fit(X, y)
-    rf_pred = rf.predict(future_x)
-
-    # LSTM
-    try:
-        y_scaled = (y - y.min()) / (y.max() - y.min())
-        X_lstm = y_scaled[:-1].reshape(-1, 1, 1)
-        y_lstm = y_scaled[1:]
-        model = Sequential()
-        model.add(LSTM(50, activation='relu', input_shape=(1, 1)))
-        model.add(Dense(1))
-        model.compile(optimizer='adam', loss='mse')
-        model.fit(X_lstm, y_lstm, epochs=100, verbose=0)
-        lstm_pred = []
-        last= y_scaled[-1].reshape(1, 1, 1)
-        for _ in range(horizon):
-            pred = model.predict(last, verbose=0)[0][0]
-            lstm_pred.append(pred)
-            last = np.array(pred).reshape(1, 1, 1)
-        lstm_pred = np.array(lstm_pred) * (y.max() - y.min()) + y.min()
-    except:
-        lstm_pred = np.full(horizon, y[-1])
-
-    return forecast, lower, upper, lr_pred, rf_pred, lstm_pred
+def update_goal(name, target, by_year):
+    sess = get_session()
+    goal = sess.query(Goal).filter_by(name=name).first()
+    if goal:
+        goal.target = target
+        goal.by_year = by_year
+        sess.commit()
+    sess.close()
 
 # ---------- UI Starts Here ----------
 st.set_page_config(page_title="Finance Dashboard", layout="wide")
 st.title("Personal Finance Tracker")
+
+# Dark Mode Toggle
+if 'dark_mode' not in st.session_state:
+    st.session_state.dark_mode = False
+
+if st.session_state.dark_mode:
+    st.markdown("""<style> [data-testid="stAppViewContainer"] { background-color: #1e1e1e; color: white; } </style>""", unsafe_allow_html=True)
+else:
+    st.markdown("""<style> [data-testid="stAppViewContainer"] { background-color: white; color: black; } </style>""", unsafe_allow_html=True)
+
+with st.sidebar:
+    if st.button("Toggle Dark Mode"):
+        st.session_state.dark_mode = not st.session_state.dark_mode
+        st.rerun()
 
 # Load data
 df = get_monthly_updates()
@@ -282,6 +281,19 @@ with st.sidebar:
         else:
             st.error("Enter an account type")
 
+    # ----- Add New Goal -----
+    st.subheader("Add New Goal")
+    new_goal_name = st.text_input("Goal Name")
+    new_goal_target = st.number_input("Target Amount ($)", min_value=0.0, format="%.2f")
+    new_goal_year = st.number_input("By Year", min_value=datetime.now().year, max_value=2100, step=1)
+    if st.button("Add Goal"):
+        if new_goal_name.strip() and new_goal_target > 0:
+            add_goal(new_goal_name.strip(), new_goal_target, new_goal_year)
+            st.success(f"Added goal: {new_goal_name.strip()}")
+            st.rerun()
+        else:
+            st.error("Enter name and target")
+
     # Admin Reset
     if st.button("Reset & Re-Seed (Admin Only)"):
         reset_database()
@@ -293,48 +305,124 @@ if not df.empty:
     if not df_contrib.empty:
         df_contrib["date"] = pd.to_datetime(df_contrib["date"])
 
-    # Collapsible Monthly Summary by Year
-    st.subheader("Monthly Summary (By Year)")
-    df['year'] = df["date"].dt.year
-    years = sorted(df['year'].unique(), reverse=True)
-    for year in years:
-        with st.expander(f"Year {year}"):
-            df_year = df[df['year'] == year]
-            pivot = df_year.pivot_table(
-                index="date",
-                columns=["person", "account_type"],
-                values="value",
-                aggfunc="sum",
-                fill_value=0,
-            )
-            st.dataframe(pivot.style.format("${:,.0f}"))
+    # Pivot
+    pivot = df.pivot_table(
+        index="date",
+        columns=["person", 'account_type'],
+        values="value",
+        aggfunc="sum",
+        fill_value=0,
+    )
+    st.subheader("Monthly Summary")
+    st.dataframe(pivot.style.format("${:,.0f}"))
 
-    # Tabbed Gain/Loss Graphs
-    st.subheader("Account Gain/Loss Views")
-    tabs = st.tabs(["YTD Gain/Loss", "Month-to-Month Gain/Loss"])
+    # Net Worth Chart with Benchmark
+    df_net = df[df["person"].isin(["Sean", "Kim"])].groupby("date")["value"].sum().reset_index()
+    df_net = df_net.sort_values("date")
+    fig_net = px.line(
+        df_net, x="date", y="value",
+        title="Family Net Worth (Sean + Kim)",
+        labels={"value": "Total ($)"}
+    )
+    fig_net.update_layout(yaxis_tickformat="$,.0f")
 
-    with tabs[0]:
-        st.write("Year-to-Date Gain/Loss (Cumulative from Jan 1)")
-        for year in years:
-            df_year = df[df['year'] == year]
-            df_year = df_year.sort_values("date")
-            df_year['month'] = df_year["date"].dt.month
-            df_year['ytd'] = df_year.groupby(['person', 'account_type'])['value'].cumsum()
-            fig_ytd = px.line(df_year, x="month", y="ytd", color="person", line_group="account_type", title=f"{year} YTD Gain/Loss")
-            st.plotly_chart(fig_ytd, use_container_width=True)
+    # Benchmark
+    st.subheader("Add Benchmark to Net Worth Chart")
+    benchmark = st.selectbox("Benchmark", ["S&P 500 (^GSPC)", "Dow Jones (^DJI)"])
+    start_date = df_net["date"].min()
+    end_date = datetime.now()
+    bench_data = yf.download(benchmark, start=start_date, end=end_date)['Adj Close']
+    bench_data = bench_data.reset_index()
+    bench_data = bench_data[(bench_data['Date'] >= start_date) & (bench_data['Date'] <= end_date)]
+    bench_data['normalized'] = (bench_data['Adj Close'] / bench_data['Adj Close'].iloc[0]) * df_net["value"].iloc[0]
+    fig_net.add_trace(go.Scatter(x=bench_data['Date'], y=bench_data['normalized'], name=benchmark, line=dict(color='gray', dash='dot')))
+    st.plotly_chart(fig_net, use_container_width=True)
 
-    with tabs[1]:
-        st.write("Month-to-Month Gain/Loss")
-        df_monthly = df.sort_values("date")
-        df_monthly['prev_value'] = df_monthly.groupby(['person', 'account_type'])['value'].shift(1)
-        df_monthly['monthly_gain'] = df_monthly['value'] - df_monthly['prev_value'].fillna(0)
-        fig_monthly = px.bar(df_monthly, x="date", y="monthly_gain", color="person", barmode="group", title="Month-to-Month Gain/Loss")
-        st.plotly_chart(fig_monthly, use_container_width=True)
+    # AI Projections
+    st.subheader("AI Growth Projections")
+    horizon = st.slider("Forecast Horizon (months)", 12, 60, 24)
+    arima_f, arima_lower, arima_upper, lr_f, rf_f = ai_projections(df_net, horizon)
+    
+    if arima_f is not None:
+        future_dates = pd.date_range(start=df_net["date"].max() + pd.DateOffset(months=1), periods=horizon, freq='MS')
+        
+        fig_proj = go.Figure()
+        fig_proj.add_trace(go.Scatter(x=df_net["date"], y=df_net["value"], name="Historical", line=dict(color='blue')))
+        
+        # ARIMA
+        fig_proj.add_trace(go.Scatter(x=future_dates, y=arima_f, name="ARIMA Forecast", line=dict(color='green')))
+        fig_proj.add_trace(go.Scatter(x=future_dates, y=arima_lower, fill=None, mode='lines', line=dict(color='green', dash='dash'), showlegend=False))
+        fig_proj.add_trace(go.Scatter(x=future_dates, y=arima_upper, fill='tonexty', mode='lines', line=dict(color='green'), name='ARIMA CI'))
+        
+        # Linear
+        fig_proj.add_trace(go.Scatter(x=future_dates, y=lr_f, name="Linear Trend", line=dict(color='orange')))
+        
+        # RF
+        fig_proj.add_trace(go.Scatter(x=future_dates, y=rf_f, name="Random Forest", line=dict(color='red')))
+        
+        fig_proj.update_layout(title=f"AI Projections ({horizon} months)", yaxis_title="Net Worth ($)", xaxis_title="Date")
+        st.plotly_chart(fig_proj, use_container_width=True)
+        
+        # Summary Table
+        proj_df = pd.DataFrame({
+            'Model': ['ARIMA (Median)', 'Linear Regression', 'Random Forest'],
+            '24 Months': [arima_f[23] if len(arima_f) > 23 else np.nan, lr_f[23] if len(lr_f) > 23 else np.nan, rf_f[23] if len(rf_f) > 23 else np.nan],
+            '60 Months': [arima_f[59] if len(arima_f) > 59 else np.nan, lr_f[59] if len(lr_f) > 59 else np.nan, rf_f[59] if len(rf_f) > 59 else np.nan]
+        })
+        proj_df = proj_df.round(0).style.format({"24 Months": "${:,.0f}", "60 Months": "${:,.0f}"})
+        st.dataframe(proj_df)
+    else:
+        st.info("Need 3+ months of data for projections.")
 
-    # [Your existing AI Projections, Goals, Growth Rates, Delete, Export - keep as is]
+    # Goals
+    st.subheader("Financial Goals")
+    goals = get_goals()
+    current = df_net["value"].iloc[-1] if not df_net.empty else 0
 
-# Render Port Fix (for Render hosting)
-import os
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8501))
-    st.run_server(port=port, host="0.0.0.0")
+    for g in goals:
+        progress = min(current / g.target, 1.0)
+        st.progress(progress)
+        st.write(f"**{g.name}**: ${current:,.0f} / ${g.target:,.0f} ({progress*100:.1f}%) → {g.by_year}")
+
+    # Growth Rates
+    st.subheader("Monthly Growth Rates")
+    latest_date = df["date"].max()
+    prev_date = latest_date - pd.DateOffset(months=1)
+    latest = df[df["date"] == latest_date]
+    prev = df[df["date"] == prev_date]
+
+    if len(prev) > 0:
+        merged = latest.merge(prev, on=["person", "account_type"], suffixes=("_curr", "_prev"))
+        merged["growth"] = (merged["value_curr"] - merged["value_prev"]) / merged["value_prev"]
+        growth_df = merged[["person", "account_type", "growth"]].copy()
+        growth_df["growth"] = (growth_df["growth"] * 100).round(2)
+        growth_df = growth_df.sort_values("growth", ascending=False)
+        st.dataframe(growth_df.style.format({"growth": "{:.2f}%"}))
+    else:
+        st.info("Not enough data for growth rates (need 2+ months)")
+
+    # Delete Entry
+    st.subheader("Delete an Entry")
+    df_disp = df.reset_index(drop=True)
+    choice = st.selectbox(
+        "Select row",
+        options=df_disp.index,
+        format_func=lambda i: f"{df_disp.loc[i,'date']} – {df_disp.loc[i,'person']} – {df_disp.loc[i,'account_type']} – ${df_disp.loc[i,'value']:,.0f}"
+    )
+    if st.button("Delete"):
+        row = df_disp.loc[choice]
+        sess = get_session()
+        sess.query(MonthlyUpdate).filter_by(
+            date=row["date"], person=row["person"], account_type=row["account_type"]
+        ).delete()
+        sess.commit()
+        sess.close()
+        st.success("Deleted!")
+        st.rerun()
+
+    # Export
+    csv_vals = df.to_csv(index=False).encode()
+    st.download_button("Export Values CSV", csv_vals, "values.csv", "text/csv")
+    if not df_contrib.empty:
+        csv_cont = df_contrib.to_csv(index=False).encode()
+        st.download_button("Export Contributions CSV", csv_cont, "contributions.csv", "text/csv")
