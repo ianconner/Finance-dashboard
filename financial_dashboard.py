@@ -6,17 +6,15 @@ import plotly.graph_objects as go
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
 import re
-import yfinance as yf
 
 # AI/ML imports
-from pmdarima import auto_arima
 from statsmodels.tsa.arima.model import ARIMA
 from sklearn.linear_model import LinearRegression
 from sklearn.ensemble import RandomForestRegressor
 
 # ---------- SQLAlchemy (persistent DB) ----------
 from sqlalchemy import (
-    create_engine, Column, String, Float, Date, Integer, text,
+    create_engine, Column, String, Float, Date, text,
     PrimaryKeyConstraint
 )
 from sqlalchemy.orm import declarative_base, sessionmaker
@@ -52,12 +50,6 @@ try:
         contribution = Column(Float)
         __table_args__ = (PrimaryKeyConstraint('date', 'person', 'account_type'),)
 
-    class Goal(Base):
-        __tablename__ = "goals"
-        name = Column(String, primary_key=True)
-        target = Column(Float)
-        by_year = Column(Integer)
-
     Base.metadata.create_all(engine)
     Session = sessionmaker(bind=engine)
 except Exception as e:
@@ -69,70 +61,132 @@ def get_session():
     return Session()
 
 def reset_database():
-    sess = get_session()
-    Base.metadata.drop_all(engine)
-    Base.metadata.create_all(engine)
-    defaults = {
-        'Sean': ['IRA', 'Roth IRA', 'TSP', 'Personal', 'T3W'],
-        'Kim': ['Retirement'],
-        'Taylor': ['Personal']
-    }
-    for p, types in defaults.items():
-        for t in types:
-            sess.merge(AccountConfig(person=p, account_type=t))
-    sess.commit()
-    sess.close()
+    try:
+        sess = get_session()
+        Base.metadata.drop_all(engine)
+        Base.metadata.create_all(engine)
+        defaults = {
+            'Sean': ['IRA', 'Roth IRA', 'TSP', 'Personal', 'T3W'],
+            'Kim': ['Retirement'],
+            'Taylor': ['Personal']
+        }
+        for p, types in defaults.items():
+            for t in types:
+                sess.merge(AccountConfig(person=p, account_type=t))
+        sess.commit()
+        sess.close()
+    except Exception as e:
+        st.error(f"Reset failed: {e}")
 
 def load_accounts():
-    sess = get_session()
-    cfg = sess.query(AccountConfig).all()
-    accounts = {}
-    for row in cfg:
-        if row.person not in accounts:
-            accounts[row.person] = []
-        accounts[row.person].append(row.account_type)
-    sess.close()
-    if not accounts:
-        reset_database()
-        return load_accounts()
-    return accounts
+    try:
+        sess = get_session()
+        cfg = sess.query(AccountConfig).all()
+        accounts = {}
+        for row in cfg:
+            if row.person not in accounts:
+                accounts[row.person] = []
+            accounts[row.person].append(row.account_type)
+        sess.close()
+        if not accounts:
+            reset_database()
+            return load_accounts()
+        return accounts
+    except Exception as e:
+        st.error(f"Load accounts error: {e}")
+        return {}
 
 def add_person(name):
-    sess = get_session()
-    sess.merge(AccountConfig(person=name, account_type="Personal"))
-    sess.commit()
-    sess.close()
+    try:
+        sess = get_session()
+        sess.merge(AccountConfig(person=name, account_type='Personal'))
+        sess.commit()
+        sess.close()
+    except Exception as e:
+        st.error(f"Add person error: {e}")
 
 def add_account_type(person, acc_type):
-    sess = get_session()
-    sess.merge(AccountConfig(person=person, account_type=acc_type))
-    sess.commit()
-    sess.close()
+    try:
+        sess = get_session()
+        sess.merge(AccountConfig(person=person, account_type=acc_type))
+        sess.commit()
+        sess.close()
+    except Exception as e:
+        st.error(f"Add account error: {e}")
+
+def delete_account_type(person, acc_type):
+    try:
+        sess = get_session()
+        sess.query(AccountConfig).filter_by(person=person, account_type=acc_type).delete()
+        sess.query(MonthlyUpdate).filter_by(person=person, account_type=acc_type).delete()
+        sess.query(Contribution).filter_by(person=person, account_type=acc_type).delete()
+        sess.commit()
+        sess.close()
+    except Exception as e:
+        st.error(f"Delete account error: {e}")
+
+def delete_person(person):
+    try:
+        sess = get_session()
+        sess.query(AccountConfig).filter_by(person=person).delete()
+        sess.query(MonthlyUpdate).filter_by(person=person).delete()
+        sess.query(Contribution).filter_by(person=person).delete()
+        sess.commit()
+        sess.close()
+    except Exception as e:
+        st.error(f"Delete person error: {e}")
 
 def add_monthly_update(date, person, acc_type, value):
-    sess = get_session()
-    sess.merge(MonthlyUpdate(date=date, person=person, account_type=acc_type, value=value))
-    sess.commit()
-    sess.close()
+    try:
+        sess = get_session()
+        stmt = insert(MonthlyUpdate.__table__).values(date=date, person=person, account_type=acc_type, value=value)
+        stmt = stmt.on_conflict_do_update(index_elements=['date', 'person', 'account_type'], set_={'value': value})
+        sess.execute(stmt)
+        sess.commit()
+        sess.close()
+    except Exception as e:
+        st.error(f"Add update error: {e}")
 
 def add_contribution(date, person, acc_type, amount):
-    sess = get_session()
-    sess.merge(Contribution(date=date, person=person, account_type=acc_type, contribution=amount))
-    sess.commit()
-    sess.close()
+    try:
+        sess = get_session()
+        stmt = insert(Contribution.__table__).values(date=date, person=person, account_type=acc_type, contribution=amount)
+        stmt = stmt.on_conflict_do_update(index_elements=['date', 'person', 'account_type'], set_={'contribution': amount})
+        sess.execute(stmt)
+        sess.commit()
+        sess.close()
+    except Exception as e:
+        st.error(f"Add contribution error: {e}")
 
 def get_monthly_updates():
-    sess = get_session()
-    rows = sess.query(MonthlyUpdate).all()
-    sess.close()
-    return pd.DataFrame([{'date': r.date, 'person': r.person, 'account_type': r.account_type, 'value': r.value} for r in rows])
+    try:
+        sess = get_session()
+        rows = sess.query(MonthlyUpdate).all()
+        sess.close()
+        return pd.DataFrame([
+            {'date': r.date, 'person': r.person,
+             'account_type': r.account_type, 'value': r.value}
+            for r in rows
+        ])
+    except Exception as e:
+        st.error(f"Get updates error: {e}")
+        return pd.DataFrame()
 
 def get_contributions():
-    sess = get_session()
-    rows = sess.query(Contribution).all()
-    sess.close()
-    return pd.DataFrame([{'date': r.date, 'person': r.person, 'account_type': r.account_type, 'contribution': r.contribution} for r in rows])
+    try:
+        sess = get_session()
+        rows = sess.query(Contribution).all()
+        sess.close()
+        return pd.DataFrame([
+            {'date': r.date, 'person': r.person,
+             'account_type': r.account_type, 'contribution': r.contribution}
+            for r in rows
+        ])
+    except Exception as e:
+        st.error(f"Get contributions error: {e}")
+        return pd.DataFrame()
 
+# ---------- ONE-TIME CSV UPLOAD TO SEED DATABASE ----------
 def seed_database_from_csv(df_uploaded):
     try:
         sess = get_session()
@@ -142,37 +196,15 @@ def seed_database_from_csv(df_uploaded):
             return
         
         for _, row in df_uploaded.iterrows():
-            date = pd.to_datetime(row['date']).date()
-            person = str(row['person'])
-            account_type = str(row['account_type'])
-            value = float(row['value'])
-            sess.merge(MonthlyUpdate(date=date, person=person, account_type=account_type, value=value))
+            stmt = insert(MonthlyUpdate.__table__).values(date=pd.to_datetime(row['date']).date(), person=str(row['person']), account_type=str(row['account_type']), value=float(row['value']))
+            stmt = stmt.on_conflict_do_update(index_elements=['date', 'person', 'account_type'], set_={'value': value})
+            sess.execute(stmt)
         
         sess.commit()
         sess.close()
         st.success(f"Seeded {len(df_uploaded)} rows into database!")
     except Exception as e:
         st.error(f"Seed failed: {e}")
-
-def get_goals():
-    sess = get_session()
-    rows = sess.query(Goal).all()
-    sess.close()
-    return [ {"name": r.name, "target": r.target, "by_year": r.by_year} for r in rows ]
-
-def add_goal(name, target, by_year):
-    sess = get_session()
-    stmt = insert(Goal.__table__).values(name=name, target=target, by_year=by_year)
-    stmt = stmt.on_conflict_do_update(index_elements=['name'], set_={'target': target, 'by_year': by_year})
-    sess.execute(stmt)
-    sess.commit()
-    sess.close()
-
-def delete_goal(name):
-    sess = get_session()
-    sess.query(Goal).filter_by(name=name).delete()
-    sess.commit()
-    sess.close()
 
 # ---------- AI ANALYTICS: Growth Projections ----------
 def ai_projections(df_net, horizon=24):
@@ -202,7 +234,8 @@ def ai_projections(df_net, horizon=24):
     lr_pred = lr.predict(future_x)
 
     # Random Forest
-    rf = RandomForestRegressor(n_estimators=50, random_state=42).fit(X, y)
+    rf = RandomForestRegressor(n_estimators=50, random_state=42)
+    rf.fit(X, y)
     rf_pred = rf.predict(future_x)
 
     return forecast, lower, upper, lr_pred, rf_pred
@@ -286,19 +319,6 @@ with st.sidebar:
         else:
             st.error("Enter an account type")
 
-    # ----- Add New Goal -----
-    st.subheader("Add New Goal")
-    new_goal_name = st.text_input("Goal Name")
-    new_goal_target = st.number_input("Target Amount ($)", min_value=0.0, format="%.2f")
-    new_goal_year = st.number_input("By Year", min_value=datetime.now().year, step=1)
-    if st.button("Add Goal"):
-        if new_goal_name.strip() and new_goal_target > 0:
-            add_goal(new_goal_name.strip(), new_goal_target, new_goal_year)
-            st.success(f"Added goal: {new_goal_name.strip()}!")
-            st.rerun()
-        else:
-            st.error("Enter name and target")
-
     # Admin Reset
     if st.button("Reset & Re-Seed (Admin Only)"):
         reset_database()
@@ -321,7 +341,7 @@ if not df.empty:
     st.subheader("Monthly Summary")
     st.dataframe(pivot.style.format("${:,.0f}"))
 
-    # Net Worth Chart with Benchmark
+    # Net Worth Chart
     df_net = df[df["person"].isin(["Sean", "Kim"])].groupby("date")["value"].sum().reset_index()
     df_net = df_net.sort_values("date")
     fig_net = px.line(
@@ -330,23 +350,6 @@ if not df.empty:
         labels={"value": "Total ($)"}
     )
     fig_net.update_layout(yaxis_tickformat="$,.0f")
-
-    # Benchmark
-    benchmark = st.selectbox("Benchmark", ["S&P 500 (^GSPC)", "Dow Jones (^DJI)", "Other Ticker"])
-    if benchmark == "Other Ticker":
-        custom_ticker = st.text_input("Enter Ticker (e.g., AAPL)")
-        benchmark_ticker = custom_ticker if custom_ticker else "^GSPC"
-    else:
-        benchmark_ticker = benchmark.split(" ")[-1].strip("()")
-
-    start_date = df_net["date"].min()
-    end_date = datetime.now()
-    bench_data = yf.download(benchmark_ticker, start=start_date, end=end_date)['Adj Close']
-    bench_data = bench_data.reset_index()
-    bench_data = bench_data[(bench_data['Date'] >= start_date) & (bench_data['Date'] <= end_date)]
-    if not bench_data.empty:
-        bench_data['normalized'] = (bench_data['Adj Close'] / bench_data['Adj Close'].iloc[0]) * df_net["value"].iloc[0]
-        fig_net.add_trace(go.Scatter(x=bench_data['Date'], y=bench_data['normalized'], name=benchmark, line=dict(color='gray', dash='dot')))
     st.plotly_chart(fig_net, use_container_width=True)
 
     # AI Projections
