@@ -14,7 +14,7 @@ from sklearn.ensemble import RandomForestRegressor
 
 # ---------- SQLAlchemy (persistent DB) ----------
 from sqlalchemy import (
-    create_engine, Column, String, Float, Date, text,
+    create_engine, Column, String, Float, Date, Integer, text,
     PrimaryKeyConstraint
 )
 from sqlalchemy.orm import declarative_base, sessionmaker
@@ -61,7 +61,6 @@ try:
 except Exception as e:
     st.error(f"Failed to connect to database: {e}")
     st.stop()
-
 # ---------- Helper DB Functions ----------
 def get_session():
     return Session()
@@ -242,6 +241,46 @@ def ai_projections(df_net, horizon=24):
     rf_pred = rf.predict(future_x)
 
     return forecast, lower, upper, lr_pred, rf_pred
+
+def get_goals():
+    try:
+        sess = get_session()
+        goals = sess.query(Goal).all()
+        sess.close()
+        return goals
+    except Exception as e:
+        st.error(f"Get goals error: {e}")
+        return []
+
+def add_goal(name, target, by_year):
+    try:
+        sess = get_session()
+        sess.merge(Goal(name=name, target=target, by_year=by_year))
+        sess.commit()
+        sess.close()
+    except Exception as e:
+        st.error(f"Add goal error: {e}")
+
+def update_goal(name, target, by_year):
+    try:
+        sess = get_session()
+        goal = sess.query(Goal).filter_by(name=name).first()
+        if goal:
+            goal.target = target
+            goal.by_year = by_year
+            sess.commit()
+        sess.close()
+    except Exception as e:
+        st.error(f"Update goal error: {e}")
+
+def delete_goal(name):
+    try:
+        sess = get_session()
+        sess.query(Goal).filter_by(name=name).delete()
+        sess.commit()
+        sess.close()
+    except Exception as e:
+        st.error(f"Delete goal error: {e}")
 
 # ---------- UI Starts Here ----------
 st.set_page_config(page_title="Finance Dashboard", layout="wide")
