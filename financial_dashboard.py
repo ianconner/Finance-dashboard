@@ -226,7 +226,6 @@ def ai_projections(df_net, horizon=24):
     y = df_net['value'].values
     X = df_net['time_idx'].values.reshape(-1, 1)
 
-    # ARIMA
     try:
         model = ARIMA(y, order=(1,1,0))
         fitted = model.fit()
@@ -239,42 +238,46 @@ def ai_projections(df_net, horizon=24):
         lower = np.full(horizon, y[-1]*0.9)
         upper = np.full(horizon, y[-1]*1.1)
 
-    # Linear Regression
     lr = LinearRegression().fit(X, y)
     future_x = np.array(range(len(df_net), len(df_net) + horizon)).reshape(-1, 1)
     lr_pred = lr.predict(future_x)
 
-    # Random Forest
     rf = RandomForestRegressor(n_estimators=50, random_state=42).fit(X, y)
     rf_pred = rf.predict(future_x)
 
     return forecast, lower, upper, lr_pred, rf_pred
 
-# ---------- UI Starts Here ----------
-st.set_page_config(page_title="Finance Dashboard", layout="wide")
-st.title("Personal Finance Tracker")
+# ←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←
+# AI UI – MUST BE IN MAIN SCRIPT, NOT INSIDE FUNCTION
+st.subheader("AI Growth Projections")
+horizon = st.slider("Forecast Horizon (months)", 12, 60, 24)
+arima_f, arima_lower, arima_upper, lr_f, rf_f = ai_projections(df_net, horizon)
 
-# Load data
-df = get_monthly_updates()
-df_contrib = get_contributions()
-
-# ----- ONE-TIME CSV SEED -----
-if df.empty:
-    st.subheader("Seed Database with CSV (One-Time Setup)")
-    uploaded_file = st.file_uploader("Upload your old CSV", type="csv")
-    if uploaded_file is not None:
-        try:
-            df_upload = pd.read_csv(uploaded_file)
-            expected_cols = ['date', 'person', 'account_type', 'value']
-            if all(col in df_upload.columns for col in expected_cols):
-                if st.button("Import CSV to Database"):
-                    seed_database_from_csv(df_upload)
-                    st.rerun()
-            else:
-                st.error(f"CSV must have columns: {expected_cols}")
-        except Exception as e:
-            st.error(f"Error reading CSV: {e}")
-
+if arima_f is not None:
+    future_dates = pd.date_range(start=df_net["date"].max() + pd.DateOffset(months=1), periods=horizon, freq='MS')
+    
+    fig_proj = go.Figure()
+    fig_proj.add_trace(go.Scatter(x=df_net["date"], y=df_net["value"], name="Historical", line=dict(color='blue')))
+    
+    fig_proj.add_trace(go.Scatter(x=future_dates, y=arima_f, name="ARIMA Forecast", line=dict(color='green')))
+    fig_proj.add_trace(go.Scatter(x=future_dates, y=arima_lower, fill=None, mode='lines', line=dict(color='green', dash='dash'), showlegend=False))
+    fig_proj.add_trace(go.Scatter(x=future_dates, y=arima_upper, fill='tonexty', mode='lines', line=dict(color='green'), name='ARIMA CI'))
+    
+    fig_proj.add_trace(go.Scatter(x=future_dates, y=lr_f, name="Linear Trend", line=dict(color='orange')))
+    fig_proj.add_trace(go.Scatter(x=future_dates, y=rf_f, name="Random Forest", line=dict(color='red')))
+    
+    fig_proj.update_layout(title=f"AI Projections ({horizon} months)", yaxis_title="Net Worth ($)", xaxis_title="Date")
+    st.plotly_chart(fig_proj, use_container_width=True)
+    
+    proj_df = pd.DataFrame({
+        'Model': ['ARIMA (Median)', 'Linear Regression', 'Random Forest'],
+        '24 Months': [arima_f[23] if len(arima_f) > 23 else np.nan, lr_f[23] if len(lr_f) > 23 else np.nan, rf_f[23] if len(rf_f) > 23 else np.nan],
+        '60 Months': [arima_f[59] if len(arima_f) > 59 else np.nan, lr_f[59] if len(lr_f) > 59 else np.nan, rf_f[59] if len(rf_f) > 59 else np.nan]
+    })
+    proj_df = proj_df.round(0).style.format({"24 Months": "${:,.0f}", "60 Months": "${:,.0f}"})
+    st.dataframe(proj_df)
+else:
+    st.info("Need 3+ months of data for projections.")
 # ----- Sidebar -----
 with st.sidebar:
     st.subheader("Add Monthly Update")
