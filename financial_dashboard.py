@@ -66,39 +66,38 @@ def get_session():
  return Session()
 
 def reset_database():
- try:
- sess = get_session()
- Base.metadata.drop_all(engine)
- Base.metadata.create_all(engine)
- defaults = {
- 'Sean': ['IRA', 'Roth IRA', 'TSP', 'Personal', 'T3W'],
- 'Kim': ['Retirement'],
- 'Taylor': ['Personal']
- }
- for p, types in defaults.items():
- for t in types:
- sess.merge(AccountConfig(person=p, account_type=t))
- sess.commit()
- sess.close()
- except Exception as e:
- st.error(f"Reset failed: {e}")
+    try:
+        sess = get_session()
+        Base.metadata.drop_all(engine)
+        Base.metadata.create_all(engine)
+        defaults = {
+            'Sean': ['IRA', 'Roth IRA', 'TSP', 'Personal', 'T3W'],
+            'Kim': ['Retirement'],
+            'Taylor': ['Personal']
+        }
+        for p, types in defaults.items():
+            for t in types:
+                sess.merge(AccountConfig(person=p, account_type=t))
+        sess.commit()
+        sess.close()
+    except Exception as e:
+        st.error(f"Reset failed: {e}")
 
 def load_accounts():
- try:
- sess = get_session()
- cfg = sess.query(AccountConfig).all()
- accounts = {}
- for row in cfg:
- accounts.setdefault(row.person, []).append(row.account_type)
- sess.close()
- if not accounts:
- reset_database()
- return load_accounts()  # <-- now safe
- return accounts
- except Exception as e:
- st.error(f"Load accounts error: {e}")
- return {}
-
+    try:
+        sess = get_session()
+        cfg = sess.query(AccountConfig).all()
+        accounts = {}
+        for row in cfg:
+            accounts.setdefault(row.person, []).append(row.account_type)
+        sess.close()
+        if not accounts:
+            reset_database()
+            return load_accounts()  # Safe recursion
+        return accounts
+    except Exception as e:
+        st.error(f"Load accounts error: {e}")
+        return {}
 def add_person(name):
  try:
  sess = get_session()
