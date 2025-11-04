@@ -22,46 +22,45 @@ from sqlalchemy.exc import SQLAlchemyError
 
 # ---------- DATABASE SETUP ----------
 try:
- url = st.secrets["postgres_url"]
- if url.startswith("postgres://"):
- url = url.replace("postgres:", "postgresql+psycopg2:", 1)
- engine = create_engine(url)
- Base = declarative_base()
+    url = st.secrets["postgres_url"]
+    if url.startswith("postgres://"):
+        url = url.replace("postgres:", "postgresql+psycopg2:", 1)
+    engine = create_engine(url)
+    Base = declarative_base()
 
- class MonthlyUpdate(Base):
- __tablename__ = "monthly_updates"
- date = Column(Date, primary_key=True)
- person = Column(String, primary_key=True)
- account_type = Column(String, primary_key=True)
- value = Column(Float)
- __table_args__ = (PrimaryKeyConstraint('date', 'person', 'account_type'),)
+    class MonthlyUpdate(Base):
+        __tablename__ = "monthly_updates"
+        date = Column(Date, primary_key=True)
+        person = Column(String, primary_key=True)
+        account_type = Column(String, primary_key=True)
+        value = Column(Float)
+        __table_args__ = (PrimaryKeyConstraint('date', 'person', 'account_type'),)
 
- class AccountConfig(Base):
- __tablename__ = "account_config"
- person = Column(String, primary_key=True)
- account_type = Column(String, primary_key=True)
- __table_args__ = (PrimaryKeyConstraint('person', 'account_type'),)
+    class AccountConfig(Base):
+        __tablename__ = "account_config"
+        person = Column(String, primary_key=True)
+        account_type = Column(String, primary_key=True)
+        __table_args__ = (PrimaryKeyConstraint('person', 'account_type'),)
 
- class Contribution(Base):
- __tablename__ = "contributions"
- date = Column(Date, primary_key=True)
- person = Column(String, primary_key=True)
- account_type = Column(String, primary_key=True)
- contribution = Column(Float)
- __table_args__ = (PrimaryKeyConstraint('date', 'person', 'account_type'),)
+    class Contribution(Base):
+        __tablename__ = "contributions"
+        date = Column(Date, primary_key=True)
+        person = Column(String, primary_key=True)
+        account_type = Column(String, primary_key=True)
+        contribution = Column(Float)
+        __table_args__ = (PrimaryKeyConstraint('date', 'person', 'account_type'),)
 
- class Goal(Base):
- __tablename__ = "goals"
- name = Column(String, primary_key=True)
- target = Column(Float)
- by_year = Column(Integer)
+    class Goal(Base):
+        __tablename__ = "goals"
+        name = Column(String, primary_key=True)
+        target = Column(Float)
+        by_year = Column(Integer)
 
- Base.metadata.create_all(engine)
- Session = sessionmaker(bind=engine)
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine)
 except Exception as e:
- st.error(f"Failed to connect to database: {e}")
- st.stop()
-
+    st.error(f"Failed to connect to database: {e}")
+    st.stop()
 # ---------- DB HELPERS ----------
 def get_session():
  return Session()
