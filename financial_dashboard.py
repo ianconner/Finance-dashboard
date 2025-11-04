@@ -351,33 +351,44 @@ if not df.empty:
     st.subheader("Monthly Summary")
     st.dataframe(pivot.style.format("${:,.0f}"))
 
-    # Net Worth Chart with Benchmark
-    df_net = df[df["person"].isin(["Sean", "Kim"])].groupby("date")["value"].sum().reset_index()
-    df_net = df_net.sort_values("date")
-    fig_net = px.line(
-        df_net, x="date", y="value",
-        title="Family Net Worth (Sean + Kim)",
-        labels={"value": "Total ($)"}
-    )
-    fig_net.update_layout(yaxis_tickformat="$,.0f")
+# Net Worth Chart with Benchmark
+df_net = df[df["person"].isin(["Sean", "Kim"])].groupby("date")["value"].sum().reset_index()
+df_net = df_net.sort_values("date")
 
-    # Benchmark
-    benchmark = st.selectbox("Benchmark", ["S&P 500 (^GSPC)", "Dow Jones (^DJI)", "Other Ticker"])
-    if benchmark == "Other Ticker":
-        custom_ticker = st.text_input("Enter Ticker (e.g., AAPL)")
-        benchmark_ticker = custom_ticker if custom_ticker else "^GSPC"
-    else:
-        benchmark_ticker = benchmark.split(" ")[-1].strip("()")
+# Remove timezone
+df_net["date"] = df_net["date"].dt.tz_localize(None)
 
-    start_date = df_net["date"].min()
-    end_date = datetime.now()
-    bench_data = yf.download(benchmark_ticker, start=start_date, end=end_date)['Adj Close']
-    bench_data = bench_data.reset_index()
-    bench_data = bench_data[(bench_data['Date'] >= start_date) & (bench_data['Date'] <= end_date)]
+fig_net = px.line(
+    df_net, x="date", y="value",
+    title="Family Net Worth (Sean + Kim)",
+    labels={"value": "Total ($)"}
+)
+fig_net.update_layout(yaxis_tickformat="$,.0f")
+
+# Benchmark
+benchmark = st.selectbox("Benchmark", ["S&P 500 (^GSPC)", "Dow Jones (^DJI)", "Other Ticker"])
+if benchmark == "Other Ticker":
+    custom_ticker = st.text_input("Enter Ticker (e.g., AAPL)")
+    benchmark_ticker = custom_ticker if custom_ticker else "^GSPC"
+else:
+    benchmark_ticker = benchmark.split(" ")[-1].strip("()")
+
+start_date = df_net["date"].min().date()
+end_date = datetime.now().date()
+
+try:
+    bench_data = yf.download(benchmark_ticker, start=start_date, end=end_date, progress=False)['Adj Close']
     if not bench_data.empty:
-        bench_data['normalized'] = (bench_data['Adj Close'] / bench_data['Adj Close'].iloc[0]) * df_net["value"].iloc[0]
-        fig_net.add_trace(go.Scatter(x=bench_data['Date'], y=bench_data['normalized'], name=benchmark, line=dict(color='gray', dash='dot')))
-    st.plotly_chart(fig_net, use_container_width=True)
+        bench_data = bench_data.reset_index()
+        bench_data['Date'] = pd.to_datetime(bench_data['Date']).dt.tz_localize(None)
+        bench_data = bench_data[(bench_data['Date'] >= pd.Timestamp(start_date)) & (bench_data['Date'] <= pd.Timestamp(end_date))]
+        if not bench_data.empty:
+            bench_data['normalized'] = (bench_data['Adj Close'] / bench_data['Adj Close'].iloc[0]) * df_net["value"].iloc[0]
+            fig_net.add_trace(go.Scatter(x=bench_data['Date'], y=bench_data['normalized'], name=benchmark, line=dict(color='gray', dash='dot')))
+except:
+    st.warning("Could not load benchmark data.")
+
+st.plotly_chart(fig_net, use_container_width=True)
 
     # AI Projections
     st.subheader("AI Growth Projections")
