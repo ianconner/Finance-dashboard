@@ -1,6 +1,5 @@
 import streamlit as st
 import pandas as pd
-import numpy as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
@@ -378,7 +377,7 @@ def analyze_portfolio(df_port):
         if not hist.empty and len(hist) > 1:
             df_res.at[i, '6mo_return'] = (hist['Close'].iloc[-1] / hist['Close'].iloc[0] - 1) * 100
 
-    # Health score
+    # Health score (simple diversification)
     std_alloc = df_res['allocation'].std()
     health = max(0, 100 - std_alloc * 8)
     health = min(100, health)
@@ -428,7 +427,7 @@ def get_ai_rebalance(df_port, df_net):
     prompt = f"""
     You are a fun, bold wealth advisor. User net worth: ${current:,.0f}.
     Portfolio: {df_port[['ticker', 'allocation']].round(1).to_dict('records')}.
-    Suggest 1-2 rebalance moves to beat S&P 500. Be concise, fun, use emojis.
+    Suggest 1-2 rebalance moves to boost growth. Be concise, fun, use emojis.
     """
     try:
         client = openai.OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
@@ -461,6 +460,47 @@ def peer_benchmark(current):
     vs_peer = current - PEER_NET_WORTH_40YO
     percentile = min(100, max(0, (current / PEER_NET_WORTH_40YO) * 50))
     return percentile, vs_peer
+
+# ---------- AI PROJECTIONS ----------
+def ai_projections(df_net, horizon=24):
+    if len(df_net) < 3:
+        return None, None, None, None, None
+    df_net = df_net.copy().dropna(subset=['value'])
+    if len(df_net) < 3:
+        st.warning("After NaN cleaning, <3 points—need more valid data.")
+        return None, None, None, None, None
+    
+    df_net['time_idx'] = range(len(df_net))
+    y = df_net['value'].values
+    X = df_net['time_idx'].values.reshape(-1, 1)
+    st.write(f"ARIMA Debug: Data len={len(y)}, mean=${np.mean(y):,.0f}, std=${np.std(y):,.0f}")
+
+    try:
+        model = ARIMA(y, order=(1,1,0))
+        fitted = model.fit()
+        forecast_result = fitted.get_forecast(steps=horizon)
+        forecast = forecast_result.predicted_mean
+        ci = forecast_result.conf_int(alpha=0.05)
+        lower = ci[:, 0]
+        upper = ci[:, 1]
+        forecast = np.array(forecast) * 0.95
+        lower *= 0.95
+        upper *= 0.95
+        st.success("ARIMA fitted successfully!")
+    except Exception as arima_err:
+        st.warning(f"ARIMA failed ({arima_err})—using conservative linear.")
+        forecast = np.full(horizon, y[-1] * 1.05)
+        lower = np.full(horizon, y[-1] * 0.95)
+        upper = np.full(horizon, y[-1] * 1.05)
+
+    lr = LinearRegression().fit(X, y)
+    future_x = np.array(range(len(df_net), len(df_net) + horizon)).reshape(-1, 1)
+    lr_pred = lr.predict(future_x) * 0.95
+
+    rf = RandomForestRegressor(n_estimators=100, max_depth=3, random_state=42).fit(X, y)
+    rf_pred = rf.predict(future_x) * 0.95
+
+    return forecast, lower, upper, lr_pred, rf_pred
 
 # ---------- UI START ----------
 st.set_page_config(page_title="Finance Dashboard", layout="wide")
@@ -592,7 +632,7 @@ if not df.empty:
         df_contrib = pd.DataFrame(columns=['date', 'person', 'account_type', 'contribution'])
 
     # COLLAPSIBLE YEARLY SUMMARY
-    st.subheader("Monthly Summary (by Year)")
+    st.subheader("Monthly Summary (by Year")
     df['year'] = df['date'].dt.year
     for year in sorted(df['year'].unique(), reverse=True):
         with st.expander(f"{year} – Click to Expand"):
@@ -824,3 +864,27 @@ if not df.empty:
                 with c1:
                     if st.button("Update", key=f"u_{g.name}"):
                         update_goal(g.name, t, y)
+                        st.success("Updated!")
+                        st.rerun()
+                with c2:
+                    if st.button("Delete", key=f"d_{g.name}"):
+                        delete_goal(g.name)
+                        st.success("Deleted!")
+                        st.rerun()
+
+    # DELETE ENTRY
+    st.subheader("Delete Entry")
+    choice = st.selectbox("Select", df.index, format_func=lambda i: f"{df.loc[i,'date']} – {df.loc[i,'person']} – ${df.loc[i,'value']:,.0f}")
+    if st.button("Delete"):
+        row = df.loc[choice]
+        sess = get_session()
+        sess.query(MonthlyUpdate).filter_by(date=row["date"], person=row["person"], account_type=row["account_type"]).delete()
+        sess.commit()
+        sess.close()
+        st.success("Deleted!")
+        st.rerun()
+
+    # EXPORT
+    st.download_button("Export Values", df.to_csv(index=False).encode(), "values.csv")
+    if not df_contrib.empty:
+        st.download_button("Export Contributions", df_contrib.to_csv(index=False).encode(), "contributions.csv")
