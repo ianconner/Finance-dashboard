@@ -108,6 +108,24 @@ def load_accounts():
         st.error(f"Load accounts error: {e}")
         return {}
 
+def add_person(name):
+    try:
+        sess = get_session()
+        sess.merge(AccountConfig(person=name, account_type='Personal'))
+        sess.commit()
+        sess.close()
+    except Exception as e:
+        st.error(f"Add person error: {e}")
+
+def add_account_type(person, acc_type):
+    try:
+        sess = get_session()
+        sess.merge(AccountConfig(person=person, account_type=acc_type))
+        sess.commit()
+        sess.close()
+    except Exception as e:
+        st.error(f"Add account error: {e}")
+
 def add_monthly_update(date, person, acc_type, value):
     try:
         sess = get_session()
@@ -233,18 +251,19 @@ def seed_database_from_csv(df_uploaded):
     except Exception as e:
         st.error(f"Seed failed: {e}")
 
-# ---------- YFINANCE FETCH (Optional) ----------
+# ---------- CACHED YFINANCE FETCH WITH RETRIES ----------
 @st.cache_data(ttl=3600)
 def fetch_benchmark_data(ticker, start_date, end_date, max_retries=3):
     start_tz = pd.Timestamp(start_date, tz='UTC').isoformat()
     end_tz = pd.Timestamp(end_date, tz='UTC').isoformat()
+    
     for attempt in range(max_retries):
         try:
             data = yf.download(ticker, start=start_tz, end=end_tz, progress=False)
             if not data.empty and 'Adj Close' in data.columns and len(data) > 0:
                 return data
             else:
-                raise ValueError("Empty data")
+                raise ValueError("Empty data or no 'Adj Close'")
         except Exception as e:
             if attempt < max_retries - 1:
                 time.sleep(5)
@@ -252,25 +271,31 @@ def fetch_benchmark_data(ticker, start_date, end_date, max_retries=3):
                 return None
     return None
 
-# ---------- STATIC BENCHMARK FALLBACK ----------
+# ---------- STATIC FALLBACK FOR BENCHMARK ----------
 def get_benchmark_fallback(ticker, user_start_date, end_date, num_points=50):
-    monthly_avg = HISTORICAL_SP_MONTHLY if ticker == '^GSPC' else HISTORICAL_DJI_MONTHLY
+    if ticker == '^GSPC':
+        monthly_avg = HISTORICAL_SP_MONTHLY
+    elif ticker == '^DJI':
+        monthly_avg = HISTORICAL_DJI_MONTHLY
+    else:
+        monthly_avg = HISTORICAL_SP_MONTHLY
+    
     dates = pd.date_range(start=user_start_date, end=end_date, freq='ME')[:num_points]
     initial_value = 100
     returns = np.random.normal(monthly_avg, VOLATILITY_STD, len(dates))
     values = initial_value * np.cumprod(1 + returns)
-    df = pd.DataFrame({'Date': dates, 'Adj Close': values})
-    df['Date'] = df['Date'].dt.tz_localize(None)
-    st.info(f"Using static {ticker} (avg {monthly_avg*100:.2f}% monthly + volatility).")
-    return df
+    fallback_df = pd.DataFrame({'Date': dates, 'Adj Close': values})
+    fallback_df['Date'] = fallback_df['Date'].dt.tz_localize(None)
+    st.info(f"Using static {ticker} fallback (avg {monthly_avg*100:.2f}% monthly with volatility).")
+    return fallback_df
 
-# ---------- AI PROJECTIONS (FIXED) ----------
+# ---------- AI PROJECTIONS ----------
 def ai_projections(df_net, horizon=24):
     if len(df_net) < 3:
         return None, None, None, None, None
     df_net = df_net.copy().dropna(subset=['value'])
     if len(df_net) < 3:
-        st.warning("After cleaning, <3 valid data points.")
+        st.warning("After NaN cleaning, <3 points—need more valid data.")
         return None, None, None, None, None
     
     df_net['time_idx'] = range(len(df_net))
@@ -283,11 +308,9 @@ def ai_projections(df_net, horizon=24):
         fitted = model.fit()
         forecast_result = fitted.get_forecast(steps=horizon)
         forecast = forecast_result.predicted_mean
-        ci = forecast_result.conf_int(alpha=0.05)  # NumPy array
-        
+        ci = forecast_result.conf_int(alpha=0.05)
         lower = ci[:, 0]
         upper = ci[:, 1]
-        
         forecast = np.array(forecast) * 0.95
         lower *= 0.95
         upper *= 0.95
@@ -307,7 +330,7 @@ def ai_projections(df_net, horizon=24):
 
     return forecast, lower, upper, lr_pred, rf_pred
 
-# ---------- UI ----------
+# ---------- UI START ----------
 st.set_page_config(page_title="Finance Dashboard", layout="wide")
 st.title("Personal Finance Tracker")
 
@@ -372,25 +395,30 @@ with st.sidebar:
 # MAIN CONTENT
 if not df.empty:
     df["date"] = pd.to_datetime(df["date"])
+
+    # Fix df_contrib safely
     if not df_contrib.empty and 'date' in df_contrib.columns:
         df_contrib["date"] = pd.to_datetime(df_contrib["date"])
     else:
         df_contrib = pd.DataFrame(columns=['date', 'person', 'account_type', 'contribution'])
 
-    # YEARLY SUMMARY
+    # COLLAPSIBLE YEARLY SUMMARY
     st.subheader("Monthly Summary (by Year)")
     df['year'] = df['date'].dt.year
     for year in sorted(df['year'].unique(), reverse=True):
         with st.expander(f"{year} – Click to Expand"):
             year_df = df[df['year'] == year]
-            pivot = year_df.pivot_table(index="date", columns=["person", "account_type"], values="value", aggfunc="sum", fill_value=0)
+            pivot = year_df.pivot_table(
+                index="date", columns=["person", 'account_type'],
+                values="value", aggfunc="sum", fill_value=0
+            )
             st.dataframe(pivot.style.format("${:,.0f}"))
 
-    # NET WORTH
+    # NET WORTH + BENCHMARK
     df_net = df[df["person"].isin(["Sean", "Kim"])].groupby("date")["value"].sum().reset_index()
     df_net = df_net.sort_values("date")
     df_net["date"] = df_net["date"].dt.tz_localize(None)
-    st.dataframe(df_net.head(5))
+    st.dataframe(df_net.head(5))  # Sample data - share this output!
 
     fig_net = px.line(df_net, x="date", y="value", title="Family Net Worth", labels={"value": "Total ($)"})
     max_value = df_net['value'].max()
@@ -398,98 +426,173 @@ if not df.empty:
     fig_net.update_yaxes(range=[0, y_max])
     fig_net.update_layout(yaxis_tickformat="$,.0f")
 
-    # BENCHMARK
+    # Benchmark
     benchmark = st.selectbox("Benchmark", ["S&P 500 (^GSPC)", "Dow Jones (^DJI)", "Other Ticker"])
-    ticker = st.text_input("Ticker", "AAPL") if benchmark == "Other Ticker" else benchmark.split(" ")[-1].strip("()")
+    if benchmark == "Other Ticker":
+        ticker = st.text_input("Ticker", "AAPL")
+    else:
+        ticker = benchmark.split(" ")[-1].strip("()")
+
     start_date = df_net["date"].min().date()
     end_date = datetime.now().date()
     historical_start = '1950-01-01'
 
+    # Use cached fetch
     data = fetch_benchmark_data(ticker, historical_start, end_date)
     if data is not None and not data.empty:
         bench = data['Adj Close'].reset_index()
         bench['Date'] = pd.to_datetime(bench['Date']).dt.tz_localize(None)
-        bench_user = bench[(bench['Date'] >= pd.Timestamp(start_date)) & (bench['Date'] <= pd.Timestamp(end_date))]
-        if not bench_user.empty:
+        # Filter to user's data range for normalization
+        bench_user_range = bench[(bench['Date'] >= pd.Timestamp(start_date)) & (bench['Date'] <= pd.Timestamp(end_date))]
+        if not bench_user_range.empty:
             initial_net = df_net["value"].iloc[0]
-            initial_bench = bench_user['Adj Close'].iloc[0]
-            bench_user['norm'] = (bench_user['Adj Close'] / initial_bench) * initial_net
-            fig_net.add_trace(go.Scatter(x=bench_user['Date'], y=bench_user['norm'], name=f"{ticker} (Live)", line=dict(dash='dot', color='gray')))
-
-    fallback_bench = get_benchmark_fallback(ticker, start_date, end_date)
-    if not fallback_bench.empty:
-        initial_net = df_net["value"].iloc[0]
-        initial_bench = fallback_bench['Adj Close'].iloc[0]
-        fallback_bench['norm'] = (fallback_bench['Adj Close'] / initial_bench) * initial_net
-        fig_net.add_trace(go.Scatter(x=fallback_bench['Date'], y=fallback_bench['norm'], name=f"{ticker} (Static)", line=dict(dash='dash', color='orange')))
+            initial_bench = bench_user_range['Adj Close'].iloc[0]
+            bench_user_range['norm'] = (bench_user_range['Adj Close'] / initial_bench) * initial_net
+            fig_net.add_trace(go.Scatter(
+                x=bench_user_range['Date'], y=bench_user_range['norm'],
+                name=f"{ticker} (Historical Normalized)", line=dict(dash='dot', color='gray')
+            ))
+        else:
+            # Fallback to full historical normalized from user start
+            bench_first_in_range = bench[bench['Date'] >= pd.Timestamp(start_date)].iloc[0] if not bench[bench['Date'] >= pd.Timestamp(start_date)].empty else bench.iloc[0]
+            initial_bench = bench_first_in_range['Adj Close']
+            bench['norm'] = (bench['Adj Close'] / initial_bench) * initial_net
+            fig_net.add_trace(go.Scatter(
+                x=bench['Date'], y=bench['norm'],
+                name=f"{ticker} (Historical)", line=dict(dash='dot', color='gray')
+            ))
+    else:
+        # Static fallback for S&P specifically
+        if ticker == '^GSPC':
+            fallback_bench = get_sp_fallback_data(start_date, end_date)
+            if not fallback_bench.empty:
+                initial_net = df_net["value"].iloc[0]
+                initial_bench = fallback_bench['Adj Close'].iloc[0]
+                fallback_bench['norm'] = (fallback_bench['Adj Close'] / initial_bench) * initial_net
+                fig_net.add_trace(go.Scatter(
+                    x=fallback_bench['Date'], y=fallback_bench['norm'],
+                    name="S&P 500 (Static Historical Avg)", line=dict(dash='dot', color='gray')
+                ))
+        else:
+            st.warning("Benchmark unavailable—using family net worth only.")
 
     st.plotly_chart(fig_net, use_container_width=True)
 
-    # ROR
+    # ROR vs S&P 500 (with historical)
     st.subheader("Rate of Return (ROR) vs S&P 500")
+    
     df_net['personal_ror'] = df_net['value'].pct_change() * 100
     df_net_ror = df_net.dropna(subset=['personal_ror']).copy()
-
-    if len(df_net_ror) >= 2:
-        sp_data = fetch_benchmark_data('^GSPC', historical_start, end_date)
-        df_ror = None
+    
+    if len(df_net_ror) < 2:
+        st.warning("Need at least 2 months of data for ROR.")
+    else:
+        sp_ticker = '^GSPC'
+        sp_data = fetch_benchmark_data(sp_ticker, historical_start, end_date)
         if sp_data is not None and not sp_data.empty:
             sp_df = sp_data['Adj Close'].reset_index()
             sp_df['Date'] = pd.to_datetime(sp_df['Date']).dt.tz_localize(None)
-            sp_user = sp_df[(sp_df['Date'] >= pd.Timestamp(start_date)) & (sp_df['Date'] <= pd.Timestamp(end_date))]
-            sp_user['sp_ror'] = sp_user['Adj Close'].pct_change() * 100
-            sp_user = sp_user.dropna(subset=['sp_ror'])
-            if not sp_user.empty:
-                df_ror = pd.merge_asof(df_net_ror[['date', 'personal_ror']].sort_values('date'), sp_user[['Date', 'sp_ror']].sort_values('Date'), left_on='date', right_on='Date', direction='nearest', tolerance=pd.Timedelta('1M'))
+            # User-range filter for merge
+            sp_user_range = sp_df[(sp_df['Date'] >= pd.Timestamp(start_date)) & (sp_df['Date'] <= pd.Timestamp(end_date))]
+            sp_user_range['sp_ror'] = sp_user_range['Adj Close'].pct_change() * 100
+            sp_user_range = sp_user_range.dropna(subset=['sp_ror'])
+            
+            if not sp_user_range.empty:
+                df_ror = pd.merge_asof(
+                    df_net_ror[['date', 'personal_ror']].sort_values('date'),
+                    sp_user_range[['Date', 'sp_ror']].sort_values('Date'),
+                    left_on='date', right_on='Date', direction='nearest', tolerance=pd.Timedelta('1M')
+                )
                 df_ror = df_ror.dropna(subset=['sp_ror'])
+                
+                if not df_ror.empty:
+                    fig_ror = go.Figure()
+                    fig_ror.add_trace(go.Bar(x=df_ror['date'], y=df_ror['personal_ror'], name='Personal ROR', marker_color='blue'))
+                    fig_ror.add_trace(go.Bar(x=df_ror['date'], y=df_ror['sp_ror'], name='S&P 500 ROR (Historical Period)', marker_color='gray'))
+                    fig_ror.update_layout(
+                        title="Monthly ROR Comparison",
+                        xaxis_title="Date",
+                        yaxis_title="Return (%)",
+                        barmode='group'
+                    )
+                    st.plotly_chart(fig_ror, use_container_width=True)
+                    
+                    periods = len(df_net) / 12
+                    personal_annual_ror = (df_net['value'].iloc[-1] / df_net['value'].iloc[0]) ** (1 / periods) - 1
+                    sp_annual_ror = (sp_user_range['Adj Close'].iloc[-1] / sp_user_range['Adj Close'].iloc[0]) ** (1 / periods) - 1
+                    historical_sp_avg = 0.07  # Conservative real return since 1950
+                    st.metric("Annualized Personal ROR", f"{personal_annual_ror * 100:.2f}%")
+                    st.metric("Annualized S&P 500 ROR (Your Period)", f"{sp_annual_ror * 100:.2f}%")
+                    st.metric("Historical S&P Avg ROR (Since 1950)", f"{historical_sp_avg * 100:.2f}% (Conservative Real)")
+                    outperformance = personal_annual_ror - historical_sp_avg
+                    st.metric("Outperformance vs Historical S&P", f"{outperformance * 100:+.2f}%")
+                else:
+                    st.warning("No overlapping dates for ROR merge.")
+            else:
+                st.warning("No S&P data in your range.")
+        else:
+            # Static fallback ROR (constant historical avg monthly)
+            historical_sp_avg = 0.07
+            historical_monthly = historical_sp_avg / 12
+            df_ror_fallback = df_net_ror[['date', 'personal_ror']].copy()
+            df_ror_fallback['sp_ror'] = historical_monthly * 100
+            fig_ror_f = go.Figure()
+            fig_ror_f.add_trace(go.Bar(x=df_ror_fallback['date'], y=df_ror_fallback['personal_ror'], name='Personal ROR', marker_color='blue'))
+            fig_ror_f.add_trace(go.Bar(x=df_ror_fallback['date'], y=df_ror_fallback['sp_ror'], name='S&P Historical Avg', marker_color='gray'))
+            fig_ror_f.update_layout(title="Monthly ROR vs Static S&P Avg", barmode='group')
+            st.plotly_chart(fig_ror_f, use_container_width=True)
+            st.info("Using static S&P monthly avg (0.58%) for comparison.")
 
-        if df_ror is None or df_ror.empty:
-            df_ror = df_net_ror[['date', 'personal_ror']].copy()
-            df_ror['sp_ror'] = HISTORICAL_SP_MONTHLY * 100
-
-        fig_ror = go.Figure()
-        fig_ror.add_trace(go.Bar(x=df_ror['date'], y=df_ror['personal_ror'], name='Personal', marker_color='blue'))
-        fig_ror.add_trace(go.Bar(x=df_ror['date'], y=df_ror['sp_ror'], name='S&P 500', marker_color='gray'))
-        fig_ror.update_layout(title="Monthly ROR", barmode='group')
-        st.plotly_chart(fig_ror, use_container_width=True)
-
-        periods = len(df_net) / 12
-        personal_annual = (df_net['value'].iloc[-1] / df_net['value'].iloc[0]) ** (1 / periods) - 1
-        st.metric("Annualized Personal ROR", f"{personal_annual * 100:.2f}%")
-        st.metric("Historical S&P (7%)", "7.00%")
-        st.metric("Outperformance", f"{(personal_annual - 0.07) * 100:+.2f}%")
-
-    # PER PERSON ROR
-    st.subheader("Per-Person ROR vs S&P")
-    fig_person = go.Figure()
-    for p in ['Sean', 'Kim']:
+    # Per-Person ROR
+    st.subheader("Per-Person ROR vs S&P 500")
+    persons = ['Sean', 'Kim']
+    fig_person_ror = go.Figure()
+    for p in persons:
         df_p = df[df['person'] == p].groupby("date")["value"].sum().reset_index()
         df_p = df_p.sort_values("date")
         df_p["date"] = df_p["date"].dt.tz_localize(None)
         df_p['ror'] = df_p['value'].pct_change() * 100
         df_p = df_p.dropna(subset=['ror'])
         if not df_p.empty:
-            fig_person.add_trace(go.Scatter(x=df_p['date'], y=df_p['ror'], mode='lines+markers', name=f"{p} ROR"))
-    if 'df_ror' in locals():
-        fig_person.add_trace(go.Scatter(x=df_ror['date'], y=df_ror['sp_ror'], mode='lines', name='S&P 500', line=dict(dash='dot')))
-    fig_person.update_layout(hovermode='x unified')
-    st.plotly_chart(fig_person, use_container_width=True)
+            fig_person_ror.add_trace(go.Scatter(x=df_p['date'], y=df_p['ror'], mode='lines+markers', name=f"{p} Monthly ROR", line=dict(width=2)))
+    
+    # Overlay S&P (from above or fallback)
+    if 'df_ror' in locals() and not df_ror.empty:
+        fig_person_ror.add_trace(go.Scatter(x=df_ror['date'], y=df_ror['sp_ror'], mode='lines', name='S&P 500 ROR', line=dict(dash='dot', color='gray')))
+    else:
+        historical_sp_avg = 0.07
+        historical_monthly = historical_sp_avg / 12
+        sp_fallback_dates = df_net_ror['date']
+        sp_fallback_ror = [historical_monthly * 100] * len(sp_fallback_dates)
+        fig_person_ror.add_trace(go.Scatter(x=sp_fallback_dates, y=sp_fallback_ror, mode='lines', name='S&P Historical Avg', line=dict(dash='dot', color='gray')))
+    
+    fig_person_ror.update_layout(
+        title="Per-Person Monthly ROR vs S&P",
+        xaxis_title="Date",
+        yaxis_title="Return (%)",
+        hovermode='x unified'
+    )
+    st.plotly_chart(fig_person_ror, use_container_width=True)
 
-    # YTD / M2M
-    tab1, tab2 = st.tabs(["YTD", "M2M"])
+    # YTD & M2M GAINS
+    tab1, tab2 = st.tabs(["YTD Gain/Loss", "Month-to-Month Gain/Loss"])
+
     with tab1:
         df_ytd = df_net.copy()
         df_ytd['year'] = df_ytd['date'].dt.year
-        fig_ytd = px.line(df_ytd, x="date", y="value", color="year")
+        df_ytd['ytd'] = df_ytd.groupby('year')['value'].cumsum()
+        fig_ytd = px.line(df_ytd, x="date", y="value", color="year", title="YTD Net Worth")
         st.plotly_chart(fig_ytd, use_container_width=True)
+
     with tab2:
         df_m2m = df_net.copy()
-        df_m2m['gain'] = df_m2m['value'].diff()
+        df_m2m['prev'] = df_m2m['value'].shift(1)
+        df_m2m['gain'] = df_m2m['value'] - df_m2m['prev']
         df_m2m = df_m2m.dropna()
-        fig_m2m = px.bar(df_m2m, x="date", y="gain")
+        fig_m2m = px.bar(df_m2m, x="date", y="gain", title="Month-to-Month Gain/Loss")
         st.plotly_chart(fig_m2m, use_container_width=True)
 
-    # AI PROJECTIONS
+    # AI GROWTH PROJECTIONS
     st.subheader("AI Growth Projections")
     horizon = st.slider("Months Ahead", 12, 60, 24)
     arima_f, ar_lower, ar_upper, lr_f, rf_f = ai_projections(df_net, horizon)
@@ -499,29 +602,31 @@ if not df.empty:
         fig_proj = go.Figure()
         fig_proj.add_trace(go.Scatter(x=df_net["date"], y=df_net["value"], name="Historical", line=dict(color="blue")))
         fig_proj.add_trace(go.Scatter(x=future_dates, y=arima_f, name="ARIMA", line=dict(color="green")))
-        fig_proj.add_trace(go.Scatter(x=future_dates, y=ar_lower, fill=None, line=dict(dash="dash"), showlegend=False))
-        fig_proj.add_trace(go.Scatter(x=future_dates, y=ar_upper, fill='tonexty', line=dict(color="lightgreen"), name="CI"))
+        fig_proj.add_trace(go.Scatter(x=future_dates, y=ar_lower, fill=None, line=dict(color="lightgreen", dash="dash"), showlegend=False))
+        fig_proj.add_trace(go.Scatter(x=future_dates, y=ar_upper, fill='tonexty', line=dict(color="lightgreen"), name="ARIMA CI"))
         fig_proj.add_trace(go.Scatter(x=future_dates, y=lr_f, name="Linear", line=dict(color="orange")))
-        fig_proj.add_trace(go.Scatter(x=future_dates, y=rf_f, name="RF", line=dict(color="red")))
-        fig_proj.update_layout(title=f"Projections ({horizon} mo)")
+        fig_proj.add_trace(go.Scatter(x=future_dates, y=rf_f, name="Random Forest", line=dict(color="red")))
+        fig_proj.update_layout(title=f"Projections ({horizon} months)", yaxis_title="Net Worth ($)")
         st.plotly_chart(fig_proj, use_container_width=True)
 
         proj_df = pd.DataFrame({
-            "Model": ["ARIMA", "Linear", "RF"],
+            "Model": ["ARIMA", "Linear", "Random Forest"],
             "24 mo": [arima_f[23] if len(arima_f) > 23 else np.nan, lr_f[23], rf_f[23]],
             "60 mo": [arima_f[59] if len(arima_f) > 59 else np.nan, lr_f[59] if len(lr_f) > 59 else np.nan, rf_f[59] if len(rf_f) > 59 else np.nan]
         }).round(0).style.format({"24 mo": "${:,.0f}", "60 mo": "${:,.0f}"})
         st.dataframe(proj_df)
+    else:
+        st.info("Need 3+ months of data.")
 
     # GOALS
-    st.subheader("Goals")
+    st.subheader("Financial Goals")
     current = df_net["value"].iloc[-1]
     for g in get_goals():
         prog = min(current / g.target, 1.0)
         st.progress(prog)
         st.write(f"**{g.name}**: ${current:,.0f} / ${g.target:,.0f} → {g.by_year}")
 
-    with st.expander("Edit Goals"):
+    with st.expander("Edit/Delete Goals"):
         for g in get_goals():
             with st.expander(f"Edit {g.name}"):
                 t = st.number_input("Target", value=g.target, key=f"t_{g.name}")
@@ -530,10 +635,12 @@ if not df.empty:
                 with c1:
                     if st.button("Update", key=f"u_{g.name}"):
                         update_goal(g.name, t, y)
+                        st.success("Updated!")
                         st.rerun()
                 with c2:
                     if st.button("Delete", key=f"d_{g.name}"):
                         delete_goal(g.name)
+                        st.success("Deleted!")
                         st.rerun()
 
     # DELETE ENTRY
