@@ -273,10 +273,10 @@ def fetch_benchmark_data(ticker, start_date, end_date, max_retries=3):
 # ---------- STATIC FALLBACK FOR S&P (Historical Avg) ----------
 def get_sp_fallback_data(user_start_date, end_date, num_points=50):
     """Static conservative S&P data: 7% annual real return since 1950, normalized from user start."""
-    historical_avg_ror = 0.07  # Conservative real return
+    historical_sp_avg = 0.07  # Conservative real return
     dates = pd.date_range(start=user_start_date, end=end_date, freq='M')[:num_points]
     initial_value = 100  # Arbitrary base
-    values = [initial_value * (1 + historical_avg_ror / 12) ** i for i in range(len(dates))]
+    values = [initial_value * (1 + historical_sp_avg / 12) ** i for i in range(len(dates))]
     fallback_df = pd.DataFrame({'Date': dates, 'Adj Close': values})
     fallback_df['Date'] = fallback_df['Date'].dt.tz_localize(None)
     st.info("Using static S&P fallback (7% historical avg return).")
@@ -439,7 +439,8 @@ if not df.empty:
             ))
         else:
             # Fallback to full historical normalized from user start
-            initial_bench = bench['Adj Close'].loc[bench['Date'] >= pd.Timestamp(start_date)].iloc[0] if len(bench) > 0 else 100
+            bench_first_in_range = bench[bench['Date'] >= pd.Timestamp(start_date)].iloc[0] if not bench[bench['Date'] >= pd.Timestamp(start_date)].empty else bench.iloc[0]
+            initial_bench = bench_first_in_range['Adj Close']
             bench['norm'] = (bench['Adj Close'] / initial_bench) * initial_net
             fig_net.add_trace(go.Scatter(
                 x=bench['Date'], y=bench['norm'],
@@ -516,6 +517,7 @@ if not df.empty:
                 st.warning("No S&P data in your range.")
         else:
             # Static fallback ROR (constant historical avg monthly)
+            historical_sp_avg = 0.07
             historical_monthly = historical_sp_avg / 12
             df_ror_fallback = df_net_ror[['date', 'personal_ror']].copy()
             df_ror_fallback['sp_ror'] = historical_monthly * 100
@@ -544,6 +546,8 @@ if not df.empty:
         fig_person_ror.add_trace(go.Scatter(x=df_ror['date'], y=df_ror['sp_ror'], mode='lines', name='S&P 500 ROR', line=dict(dash='dot', color='gray')))
     else:
         # Fallback line
+        historical_sp_avg = 0.07
+        historical_monthly = historical_sp_avg / 12
         sp_fallback_dates = df_net_ror['date']
         sp_fallback_ror = [historical_monthly * 100] * len(sp_fallback_dates)
         fig_person_ror.add_trace(go.Scatter(x=sp_fallback_dates, y=sp_fallback_ror, mode='lines', name='S&P Historical Avg', line=dict(dash='dot', color='gray')))
