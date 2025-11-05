@@ -823,4 +823,4 @@ if not df.empty:
                 c1, c2 = st.columns(2)
                 with c1:
                     if st.button("Update", key=f"u_{g.name}"):
-                        update_goal(g.name, t, y
+                        update_goal(g.name, t, y)
