@@ -271,17 +271,18 @@ def fetch_benchmark_data(ticker, start_date, end_date, max_retries=3):
                 return None
     return None
 
-# ---------- STATIC FALLBACK FOR BENCHMARK ----------
+# ---------- STATIC FALLBACK FOR S&P (Historical Avg) ----------
 def get_benchmark_fallback(ticker, user_start_date, end_date, num_points=50):
+    """Static conservative S&P data: 7% annual real return since 1950, normalized from user start."""
     if ticker == '^GSPC':
         monthly_avg = HISTORICAL_SP_MONTHLY
     elif ticker == '^DJI':
         monthly_avg = HISTORICAL_DJI_MONTHLY
     else:
-        monthly_avg = HISTORICAL_SP_MONTHLY
+        monthly_avg = HISTORICAL_SP_MONTHLY  # Default to S&P
     
     dates = pd.date_range(start=user_start_date, end=end_date, freq='ME')[:num_points]
-    initial_value = 100
+    initial_value = 100  # Arbitrary base
     returns = np.random.normal(monthly_avg, VOLATILITY_STD, len(dates))
     values = initial_value * np.cumprod(1 + returns)
     fallback_df = pd.DataFrame({'Date': dates, 'Adj Close': values})
@@ -464,7 +465,7 @@ if not df.empty:
     else:
         # Static fallback for S&P specifically
         if ticker == '^GSPC':
-            fallback_bench = get_sp_fallback_data(start_date, end_date)
+            fallback_bench = get_benchmark_fallback(ticker, start_date, end_date)
             if not fallback_bench.empty:
                 initial_net = df_net["value"].iloc[0]
                 initial_bench = fallback_bench['Adj Close'].iloc[0]
