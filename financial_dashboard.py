@@ -509,6 +509,14 @@ st.title("Personal Finance Tracker")
 df = get_monthly_updates()
 df_contrib = get_contributions()
 
+# === EARLY df_net DEFINITION (FIX #1) ===
+df_net = pd.DataFrame()  # Initialize early
+if not df.empty:
+    df["date"] = pd.to_datetime(df["date"])
+    df_net = df[df["person"].isin(["Sean", "Kim"])].groupby("date")["value"].sum().reset_index()
+    df_net = df_net.sort_values("date")
+    df_net["date"] = df_net["date"].dt.tz_localize(None)
+
 # ONE-TIME SEED
 if df.empty:
     st.subheader("Seed Database with CSV (One-Time)")
@@ -598,12 +606,15 @@ with st.sidebar:
     else:
         st.info("No hot sectors right now.")
 
-    # 7. AI Rebalance Bot
+    # 7. AI Rebalance Bot — NOW SAFE
     st.subheader("7. AI Rebalance Bot")
     if st.button("Ask AI Advisor"):
-        with st.spinner("Thinking..."):
-            advice = get_ai_rebalance(df_port, df_net)
-            st.markdown(advice)
+        if df.empty:
+            st.warning("Add monthly data first to get AI advice.")
+        else:
+            with st.spinner("Thinking..."):
+                advice = get_ai_rebalance(df_port, df_net)
+                st.markdown(advice)
 
     # 8. Dividend Snowball
     st.subheader("8. Dividend Snowball")
@@ -612,14 +623,45 @@ with st.sidebar:
         if fig:
             st.plotly_chart(fig, use_container_width=True)
 
-    # 9. Peer Benchmark
+    # 9. Peer Benchmark — NOW SAFE
     st.subheader("9. Peer Benchmark")
-    if not df_net.empty:
+    if not df.empty:
         current = df_net["value"].iloc[-1]
         pct, vs = peer_benchmark(current)
         st.metric("vs. Avg 40yo", f"Top {100-int(pct)}%", delta=f"{vs:+,}")
         if pct > 80:
             st.balloons()
+    else:
+        st.info("Add data to see peer ranking.")
+
+# === MAIN CONTENT (rest unchanged) ===
+if not df.empty:
+    # Fix df_contrib safely
+    if not df_contrib.empty and 'date' in df_contrib.columns:
+        df_contrib["date"] = pd.to_datetime(df_contrib["date"])
+    else:
+        df_contrib = pd.DataFrame(columns=['date', 'person', 'account_type', 'contribution'])
+
+    # COLLAPSIBLE YEARLY SUMMARY
+    st.subheader("Monthly Summary (by Year)")
+    df['year'] = df['date'].dt.year
+    for year in sorted(df['year'].unique(), reverse=True):
+        with st.expander(f"{year} – Click to Expand"):
+            year_df = df[df['year'] == year]
+            pivot = year_df.pivot_table(
+                index="date", columns=["person", 'account_type'],
+                values="value", aggfunc="sum", fill_value=0
+            )
+            st.dataframe(pivot.style.format("${:,.0f}"))
+
+    # NET WORTH + BENCHMARK (df_net already defined above)
+    st.dataframe(df_net.head(5))
+
+    fig_net = px.line(df_net, x="date", y="value", title="Family Net Worth", labels={"value": "Total ($)"})
+    max_value = df_net['value'].max()
+    y_max = np.ceil(max_value / 50000) * 50000
+    fig_net.update_yaxes(range=[0, y_max])
+    fig_net.update_layout(yaxis_tickformat="$,.0f")
 
 # MAIN CONTENT
 if not df.empty:
