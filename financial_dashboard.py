@@ -290,13 +290,13 @@ def get_benchmark_fallback(ticker, user_start_date, end_date, num_points=50):
     st.info(f"Using enhanced static {ticker} fallback (avg {monthly_avg*100:.2f}% monthly with volatility).")
     return fallback_df
 
-# ---------- AI PROJECTIONS ----------
+# ---------- AI PROJECTIONS (FIXED) ----------
 def ai_projections(df_net, horizon=24):
     if len(df_net) < 3:
         return None, None, None, None, None
     df_net = df_net.copy().dropna(subset=['value'])
     if len(df_net) < 3:
-        st.warning("After NaN cleaning, <3 points—need more valid data.")
+        st.warning("After cleaning, <3 valid data points.")
         return None, None, None, None, None
     
     df_net['time_idx'] = range(len(df_net))
@@ -308,17 +308,25 @@ def ai_projections(df_net, horizon=24):
     try:
         model = ARIMA(y, order=(1,1,0))
         fitted = model.fit()
-        forecast = fitted.forecast(steps=horizon)
-        ci = fitted.get_forecast(steps=horizon).conf_int(alpha=0.05)
-        lower = ci.iloc[:, 0]
-        upper = ci.iloc[:, 1]
-        forecast *= 0.95  # Dampen for conservatism
+        forecast_result = fitted.get_forecast(steps=horizon)
+        forecast = forecast_result.predicted_mean
+        ci = forecast_result.conf_int(alpha=0.05)  # This is a NumPy array!
+        
+        # Fix: Use .values or indexing, NOT .iloc
+        lower = ci[:, 0]  # First column = lower bound
+        upper = ci[:, 1]  # Second column = upper bound
+        
+        forecast = np.array(forecast) * 0.95  # Dampen
+        lower *= 0.95
+        upper *= 0.95
+        st.success("ARIMA fitted successfully!")
     except Exception as arima_err:
         st.warning(f"ARIMA failed ({arima_err})—using conservative linear.")
         forecast = np.full(horizon, y[-1] * 1.05)
-        lower = np.full(horizon, y[-1]*0.95)
-        upper = np.full(horizon, y[-1]*1.05)
+        lower = np.full(horizon, y[-1] * 0.95)
+        upper = np.full(horizon, y[-1] * 1.05)
 
+    # Linear & RF
     lr = LinearRegression().fit(X, y)
     future_x = np.array(range(len(df_net), len(df_net) + horizon)).reshape(-1, 1)
     lr_pred = lr.predict(future_x) * 0.95
