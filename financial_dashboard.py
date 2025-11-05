@@ -290,13 +290,13 @@ def get_benchmark_fallback(ticker, user_start_date, end_date, num_points=50):
     st.info(f"Using enhanced static {ticker} fallback (avg {monthly_avg*100:.2f}% monthly with volatility).")
     return fallback_df
 
-# ---------- AI PROJECTIONS (Robust ARIMA) ----------
+# ---------- AI PROJECTIONS ----------
 def ai_projections(df_net, horizon=24):
     if len(df_net) < 3:
         return None, None, None, None, None
     df_net = df_net.copy().dropna(subset=['value'])
-    if df_net.empty or df_net['value'].is_monotonic_increasing == False:
-        st.warning("Data not strictly increasing—using linear fallback.")
+    if len(df_net) < 3:
+        st.warning("After NaN cleaning, <3 points—need more valid data.")
         return None, None, None, None, None
     
     df_net['time_idx'] = range(len(df_net))
@@ -304,26 +304,17 @@ def ai_projections(df_net, horizon=24):
     X = df_net['time_idx'].values.reshape(-1, 1)
     st.write(f"ARIMA Debug: Data len={len(y)}, mean=${np.mean(y):,.0f}, std=${np.std(y):,.0f}")
 
-    # Try multiple ARIMA orders
-    orders = [(1,1,0), (0,1,0), (1,0,1)]
-    forecast = None
-    for order in orders:
-        try:
-            model = ARIMA(y, order=order)
-            fitted = model.fit()
-            forecast = fitted.forecast(steps=horizon)
-            ci = fitted.get_forecast(steps=horizon).conf_int(alpha=0.05)
-            lower = ci.iloc[:, 0]
-            upper = ci.iloc[:, 1]
-            forecast *= 0.95  # Conservative damp
-            st.success(f"✅ ARIMA fitted with order {order}")
-            break
-        except Exception as e:
-            st.warning(f"Order {order} failed: {e}")
-            continue
-    
-    if forecast is None:
-        st.warning("All ARIMA failed—using conservative linear.")
+    # Conservative ARIMA
+    try:
+        model = ARIMA(y, order=(1,1,0))
+        fitted = model.fit()
+        forecast = fitted.forecast(steps=horizon)
+        ci = fitted.get_forecast(steps=horizon).conf_int(alpha=0.05)
+        lower = ci.iloc[:, 0]
+        upper = ci.iloc[:, 1]
+        forecast *= 0.95  # Dampen for conservatism
+    except Exception as arima_err:
+        st.warning(f"ARIMA failed ({arima_err})—using conservative linear.")
         forecast = np.full(horizon, y[-1] * 1.05)
         lower = np.full(horizon, y[-1]*0.95)
         upper = np.full(horizon, y[-1]*1.05)
