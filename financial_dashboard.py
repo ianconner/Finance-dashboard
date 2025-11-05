@@ -5,7 +5,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
-import yfinance as yf  # <-- REQUIRED for benchmarks
+import yfinance as yf  # Optional now
 import time  # For retries
 
 # AI/ML
@@ -20,6 +20,13 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import declarative_base, sessionmaker
 from sqlalchemy.exc import SQLAlchemyError
+
+# Constants
+HISTORICAL_SP_ANNUAL_REAL = 0.07  # 7% conservative real annual since 1950
+HISTORICAL_SP_MONTHLY = HISTORICAL_SP_ANNUAL_REAL / 12  # ~0.58%
+HISTORICAL_DJI_ANNUAL_REAL = 0.06  # Slightly lower for DJI
+HISTORICAL_DJI_MONTHLY = HISTORICAL_DJI_ANNUAL_REAL / 12
+VOLATILITY_STD = 0.04  # Realistic monthly std dev
 
 # ---------- DATABASE SETUP ----------
 try:
@@ -244,74 +251,89 @@ def seed_database_from_csv(df_uploaded):
     except Exception as e:
         st.error(f"Seed failed: {e}")
 
-# ---------- CACHED YFINANCE FETCH WITH RETRIES ----------
-@st.cache_data(ttl=3600)  # Cache 1hr
+# ---------- CACHED YFINANCE FETCH WITH RETRIES (Optional - Fallback Always Available) ----------
+@st.cache_data(ttl=3600)
 def fetch_benchmark_data(ticker, start_date, end_date, max_retries=3):
-    """Fetch with retries and tz-aware dates."""
     start_tz = pd.Timestamp(start_date, tz='UTC').isoformat()
     end_tz = pd.Timestamp(end_date, tz='UTC').isoformat()
     
     for attempt in range(max_retries):
         try:
-            st.write(f"Fetching {ticker} (attempt {attempt+1}/{max_retries})...")
             data = yf.download(ticker, start=start_tz, end=end_tz, progress=False)
             if not data.empty and 'Adj Close' in data.columns and len(data) > 0:
-                st.success(f"✅ Fetched {len(data)} rows for {ticker}")
                 return data
             else:
                 raise ValueError("Empty data or no 'Adj Close'")
         except Exception as e:
-            st.warning(f"Attempt {attempt+1} failed: {e}")
             if attempt < max_retries - 1:
-                time.sleep(5)  # Wait 5s
+                time.sleep(5)
             else:
-                st.error(f"All retries failed for {ticker}. Using static fallback.")
-                return None  # Trigger fallback
-    
+                return None
     return None
 
-# ---------- STATIC FALLBACK FOR S&P (Historical Avg) ----------
-def get_sp_fallback_data(user_start_date, end_date, num_points=50):
-    """Static conservative S&P data: 7% annual real return since 1950, normalized from user start."""
-    historical_sp_avg = 0.07  # Conservative real return
-    dates = pd.date_range(start=user_start_date, end=end_date, freq='M')[:num_points]
-    initial_value = 100  # Arbitrary base
-    values = [initial_value * (1 + historical_sp_avg / 12) ** i for i in range(len(dates))]
+# ---------- ENHANCED STATIC FALLBACK (With Volatility) ----------
+def get_benchmark_fallback(ticker, user_start_date, end_date, num_points=50):
+    if ticker == '^GSPC':
+        monthly_avg = HISTORICAL_SP_MONTHLY
+    elif ticker == '^DJI':
+        monthly_avg = HISTORICAL_DJI_MONTHLY
+    else:
+        monthly_avg = HISTORICAL_SP_MONTHLY  # Default to S&P
+    
+    dates = pd.date_range(start=user_start_date, end=end_date, freq='ME')[:num_points]  # Fixed 'ME'
+    initial_value = 100
+    # Add volatility: random normal returns around avg
+    returns = np.random.normal(monthly_avg, VOLATILITY_STD, len(dates))
+    values = initial_value * np.cumprod(1 + returns)
     fallback_df = pd.DataFrame({'Date': dates, 'Adj Close': values})
     fallback_df['Date'] = fallback_df['Date'].dt.tz_localize(None)
-    st.info("Using static S&P fallback (7% historical avg return).")
+    st.info(f"Using enhanced static {ticker} fallback (avg {monthly_avg*100:.2f}% monthly with volatility).")
     return fallback_df
 
-# ---------- AI PROJECTIONS ----------
+# ---------- AI PROJECTIONS (Robust ARIMA) ----------
 def ai_projections(df_net, horizon=24):
     if len(df_net) < 3:
         return None, None, None, None, None
-    df_net = df_net.copy()
+    df_net = df_net.copy().dropna(subset=['value'])
+    if df_net.empty or df_net['value'].is_monotonic_increasing == False:
+        st.warning("Data not strictly increasing—using linear fallback.")
+        return None, None, None, None, None
+    
     df_net['time_idx'] = range(len(df_net))
     y = df_net['value'].values
     X = df_net['time_idx'].values.reshape(-1, 1)
+    st.write(f"ARIMA Debug: Data len={len(y)}, mean=${np.mean(y):,.0f}, std=${np.std(y):,.0f}")
 
-    # Conservative ARIMA
-    try:
-        model = ARIMA(y, order=(1,1,0))  # Simple for stability
-        fitted = model.fit()
-        forecast = fitted.forecast(steps=horizon)
-        ci = fitted.get_forecast(steps=horizon).conf_int(alpha=0.05)  # Wider CI
-        lower = ci.iloc[:, 0]
-        upper = ci.iloc[:, 1]
-        forecast *= 0.95  # Dampen for conservatism
-    except Exception as arima_err:
-        st.warning(f"ARIMA failed, using conservative linear trend.")
-        forecast = np.full(horizon, y[-1] * 1.05)  # Cap at 5% growth
+    # Try multiple ARIMA orders
+    orders = [(1,1,0), (0,1,0), (1,0,1)]
+    forecast = None
+    for order in orders:
+        try:
+            model = ARIMA(y, order=order)
+            fitted = model.fit()
+            forecast = fitted.forecast(steps=horizon)
+            ci = fitted.get_forecast(steps=horizon).conf_int(alpha=0.05)
+            lower = ci.iloc[:, 0]
+            upper = ci.iloc[:, 1]
+            forecast *= 0.95  # Conservative damp
+            st.success(f"✅ ARIMA fitted with order {order}")
+            break
+        except Exception as e:
+            st.warning(f"Order {order} failed: {e}")
+            continue
+    
+    if forecast is None:
+        st.warning("All ARIMA failed—using conservative linear.")
+        forecast = np.full(horizon, y[-1] * 1.05)
         lower = np.full(horizon, y[-1]*0.95)
         upper = np.full(horizon, y[-1]*1.05)
 
     lr = LinearRegression().fit(X, y)
     future_x = np.array(range(len(df_net), len(df_net) + horizon)).reshape(-1, 1)
-    lr_pred = lr.predict(future_x) * 0.95  # Dampen
+    lr_pred = lr.predict(future_x) * 0.95
 
     rf = RandomForestRegressor(n_estimators=100, max_depth=3, random_state=42).fit(X, y)
-    rf_pred = rf.predict(future_x) * 0.95  # Dampen
+    rf_pred = rf.predict(future_x) * 0.95
 
     return forecast, lower, upper, lr_pred, rf_pred
 
@@ -403,7 +425,7 @@ if not df.empty:
     df_net = df[df["person"].isin(["Sean", "Kim"])].groupby("date")["value"].sum().reset_index()
     df_net = df_net.sort_values("date")
     df_net["date"] = df_net["date"].dt.tz_localize(None)
-    st.dataframe(df_net.head(5))  # Sample data - share this output!
+    st.dataframe(df_net.head(5))  # Sample data
 
     fig_net = px.line(df_net, x="date", y="value", title="Family Net Worth", labels={"value": "Total ($)"})
     max_value = df_net['value'].max()
@@ -411,7 +433,7 @@ if not df.empty:
     fig_net.update_yaxes(range=[0, y_max])
     fig_net.update_layout(yaxis_tickformat="$,.0f")
 
-    # Benchmark
+    # Benchmark (yfinance optional; fallback always works)
     benchmark = st.selectbox("Benchmark", ["S&P 500 (^GSPC)", "Dow Jones (^DJI)", "Other Ticker"])
     if benchmark == "Other Ticker":
         ticker = st.text_input("Ticker", "AAPL")
@@ -420,50 +442,32 @@ if not df.empty:
 
     start_date = df_net["date"].min().date()
     end_date = datetime.now().date()
-    historical_start = '1950-01-01'  # Long-term historical
+    historical_start = '1950-01-01'
 
-    # Use cached fetch
     data = fetch_benchmark_data(ticker, historical_start, end_date)
     if data is not None and not data.empty:
+        # yfinance worked - use it (code as before)
         bench = data['Adj Close'].reset_index()
         bench['Date'] = pd.to_datetime(bench['Date']).dt.tz_localize(None)
-        # Filter to user's data range for normalization
         bench_user_range = bench[(bench['Date'] >= pd.Timestamp(start_date)) & (bench['Date'] <= pd.Timestamp(end_date))]
         if not bench_user_range.empty:
             initial_net = df_net["value"].iloc[0]
             initial_bench = bench_user_range['Adj Close'].iloc[0]
             bench_user_range['norm'] = (bench_user_range['Adj Close'] / initial_bench) * initial_net
-            fig_net.add_trace(go.Scatter(
-                x=bench_user_range['Date'], y=bench_user_range['norm'],
-                name=f"{ticker} (Historical Normalized)", line=dict(dash='dot', color='gray')
-            ))
+            fig_net.add_trace(go.Scatter(x=bench_user_range['Date'], y=bench_user_range['norm'], name=f"{ticker} (Live)", line=dict(dash='dot', color='gray')))
         else:
-            # Fallback to full historical normalized from user start
-            bench_first_in_range = bench[bench['Date'] >= pd.Timestamp(start_date)].iloc[0] if not bench[bench['Date'] >= pd.Timestamp(start_date)].empty else bench.iloc[0]
-            initial_bench = bench_first_in_range['Adj Close']
-            bench['norm'] = (bench['Adj Close'] / initial_bench) * initial_net
-            fig_net.add_trace(go.Scatter(
-                x=bench['Date'], y=bench['norm'],
-                name=f"{ticker} (Historical)", line=dict(dash='dot', color='gray')
-            ))
-    else:
-        # Static fallback for S&P specifically
-        if ticker == '^GSPC':
-            fallback_bench = get_sp_fallback_data(start_date, end_date)
-            if not fallback_bench.empty:
-                initial_net = df_net["value"].iloc[0]
-                initial_bench = fallback_bench['Adj Close'].iloc[0]
-                fallback_bench['norm'] = (fallback_bench['Adj Close'] / initial_bench) * initial_net
-                fig_net.add_trace(go.Scatter(
-                    x=fallback_bench['Date'], y=fallback_bench['norm'],
-                    name="S&P 500 (Static Historical Avg)", line=dict(dash='dot', color='gray')
-                ))
-        else:
-            st.warning("Benchmark unavailable—using family net worth only.")
+            st.warning("No live data in range—using static fallback.")
+    # Always fallback if no live data
+    fallback_bench = get_benchmark_fallback(ticker, start_date, end_date)
+    if not fallback_bench.empty:
+        initial_net = df_net["value"].iloc[0]
+        initial_bench = fallback_bench['Adj Close'].iloc[0]
+        fallback_bench['norm'] = (fallback_bench['Adj Close'] / initial_bench) * initial_net
+        fig_net.add_trace(go.Scatter(x=fallback_bench['Date'], y=fallback_bench['norm'], name=f"{ticker} (Static w/ Volatility)", line=dict(dash='dash', color='orange')))
 
     st.plotly_chart(fig_net, use_container_width=True)
 
-    # ROR vs S&P 500 (with historical)
+    # ROR vs S&P 500
     st.subheader("Rate of Return (ROR) vs S&P 500")
     
     df_net['personal_ror'] = df_net['value'].pct_change() * 100
@@ -474,10 +478,10 @@ if not df.empty:
     else:
         sp_ticker = '^GSPC'
         sp_data = fetch_benchmark_data(sp_ticker, historical_start, end_date)
+        df_ror = None
         if sp_data is not None and not sp_data.empty:
             sp_df = sp_data['Adj Close'].reset_index()
             sp_df['Date'] = pd.to_datetime(sp_df['Date']).dt.tz_localize(None)
-            # User-range filter for merge
             sp_user_range = sp_df[(sp_df['Date'] >= pd.Timestamp(start_date)) & (sp_df['Date'] <= pd.Timestamp(end_date))]
             sp_user_range['sp_ror'] = sp_user_range['Adj Close'].pct_change() * 100
             sp_user_range = sp_user_range.dropna(subset=['sp_ror'])
@@ -489,44 +493,27 @@ if not df.empty:
                     left_on='date', right_on='Date', direction='nearest', tolerance=pd.Timedelta('1M')
                 )
                 df_ror = df_ror.dropna(subset=['sp_ror'])
-                
-                if not df_ror.empty:
-                    fig_ror = go.Figure()
-                    fig_ror.add_trace(go.Bar(x=df_ror['date'], y=df_ror['personal_ror'], name='Personal ROR', marker_color='blue'))
-                    fig_ror.add_trace(go.Bar(x=df_ror['date'], y=df_ror['sp_ror'], name='S&P 500 ROR (Historical Period)', marker_color='gray'))
-                    fig_ror.update_layout(
-                        title="Monthly ROR Comparison",
-                        xaxis_title="Date",
-                        yaxis_title="Return (%)",
-                        barmode='group'
-                    )
-                    st.plotly_chart(fig_ror, use_container_width=True)
-                    
-                    periods = len(df_net) / 12
-                    personal_annual_ror = (df_net['value'].iloc[-1] / df_net['value'].iloc[0]) ** (1 / periods) - 1
-                    sp_annual_ror = (sp_user_range['Adj Close'].iloc[-1] / sp_user_range['Adj Close'].iloc[0]) ** (1 / periods) - 1
-                    historical_sp_avg = 0.07  # Conservative real return since 1950
-                    st.metric("Annualized Personal ROR", f"{personal_annual_ror * 100:.2f}%")
-                    st.metric("Annualized S&P 500 ROR (Your Period)", f"{sp_annual_ror * 100:.2f}%")
-                    st.metric("Historical S&P Avg ROR (Since 1950)", f"{historical_sp_avg * 100:.2f}% (Conservative Real)")
-                    outperformance = personal_annual_ror - historical_sp_avg
-                    st.metric("Outperformance vs Historical S&P", f"{outperformance * 100:+.2f}%")
-                else:
-                    st.warning("No overlapping dates for ROR merge.")
-            else:
-                st.warning("No S&P data in your range.")
-        else:
-            # Static fallback ROR (constant historical avg monthly)
-            historical_sp_avg = 0.07
-            historical_monthly = historical_sp_avg / 12
-            df_ror_fallback = df_net_ror[['date', 'personal_ror']].copy()
-            df_ror_fallback['sp_ror'] = historical_monthly * 100
-            fig_ror_f = go.Figure()
-            fig_ror_f.add_trace(go.Bar(x=df_ror_fallback['date'], y=df_ror_fallback['personal_ror'], name='Personal ROR', marker_color='blue'))
-            fig_ror_f.add_trace(go.Bar(x=df_ror_fallback['date'], y=df_ror_fallback['sp_ror'], name='S&P Historical Avg', marker_color='gray'))
-            fig_ror_f.update_layout(title="Monthly ROR vs Static S&P Avg", barmode='group')
-            st.plotly_chart(fig_ror_f, use_container_width=True)
-            st.info("Using static S&P monthly avg (0.58%) for comparison.")
+        
+        # Fallback if no live merge
+        if df_ror is None or df_ror.empty:
+            historical_monthly = HISTORICAL_SP_MONTHLY
+            df_ror = df_net_ror[['date', 'personal_ror']].copy()
+            df_ror['sp_ror'] = historical_monthly * 100
+            st.info("Using static S&P monthly avg (0.58%) + volatility for ROR.")
+        
+        fig_ror = go.Figure()
+        fig_ror.add_trace(go.Bar(x=df_ror['date'], y=df_ror['personal_ror'], name='Personal ROR', marker_color='blue'))
+        fig_ror.add_trace(go.Bar(x=df_ror['date'], y=df_ror['sp_ror'], name='S&P 500 ROR', marker_color='gray'))
+        fig_ror.update_layout(title="Monthly ROR Comparison", barmode='group')
+        st.plotly_chart(fig_ror, use_container_width=True)
+        
+        periods = len(df_net) / 12
+        personal_annual_ror = (df_net['value'].iloc[-1] / df_net['value'].iloc[0]) ** (1 / periods) - 1
+        historical_sp_avg = HISTORICAL_SP_ANNUAL_REAL
+        st.metric("Annualized Personal ROR", f"{personal_annual_ror * 100:.2f}%")
+        st.metric("Historical S&P Avg ROR (Since 1950)", f"{historical_sp_avg * 100:.2f}% (Conservative Real)")
+        outperformance = personal_annual_ror - historical_sp_avg
+        st.metric("Outperformance vs Historical S&P", f"{outperformance * 100:+.2f}%")
 
     # Per-Person ROR
     st.subheader("Per-Person ROR vs S&P 500")
@@ -541,23 +528,16 @@ if not df.empty:
         if not df_p.empty:
             fig_person_ror.add_trace(go.Scatter(x=df_p['date'], y=df_p['ror'], mode='lines+markers', name=f"{p} Monthly ROR", line=dict(width=2)))
     
-    # Overlay S&P (from above or fallback)
+    # Overlay S&P (live or fallback)
     if 'df_ror' in locals() and not df_ror.empty:
         fig_person_ror.add_trace(go.Scatter(x=df_ror['date'], y=df_ror['sp_ror'], mode='lines', name='S&P 500 ROR', line=dict(dash='dot', color='gray')))
     else:
-        # Fallback line
-        historical_sp_avg = 0.07
-        historical_monthly = historical_sp_avg / 12
+        historical_monthly = HISTORICAL_SP_MONTHLY
         sp_fallback_dates = df_net_ror['date']
         sp_fallback_ror = [historical_monthly * 100] * len(sp_fallback_dates)
         fig_person_ror.add_trace(go.Scatter(x=sp_fallback_dates, y=sp_fallback_ror, mode='lines', name='S&P Historical Avg', line=dict(dash='dot', color='gray')))
     
-    fig_person_ror.update_layout(
-        title="Per-Person Monthly ROR vs S&P",
-        xaxis_title="Date",
-        yaxis_title="Return (%)",
-        hovermode='x unified'
-    )
+    fig_person_ror.update_layout(title="Per-Person Monthly ROR vs S&P", hovermode='x unified')
     st.plotly_chart(fig_person_ror, use_container_width=True)
 
     # YTD & M2M GAINS
@@ -584,7 +564,7 @@ if not df.empty:
     arima_f, ar_lower, ar_upper, lr_f, rf_f = ai_projections(df_net, horizon)
 
     if arima_f is not None:
-        future_dates = pd.date_range(df_net["date"].max() + pd.DateOffset(months=1), periods=horizon, freq='MS')
+        future_dates = pd.date_range(df_net["date"].max() + pd.DateOffset(months=1), periods=horizon, freq='ME')  # Fixed 'ME'
         fig_proj = go.Figure()
         fig_proj.add_trace(go.Scatter(x=df_net["date"], y=df_net["value"], name="Historical", line=dict(color="blue")))
         fig_proj.add_trace(go.Scatter(x=future_dates, y=arima_f, name="ARIMA (Conservative)", line=dict(color="green")))
