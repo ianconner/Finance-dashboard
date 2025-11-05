@@ -632,7 +632,7 @@ if not df.empty:
         df_contrib = pd.DataFrame(columns=['date', 'person', 'account_type', 'contribution'])
 
     # COLLAPSIBLE YEARLY SUMMARY
-    st.subheader("Monthly Summary (by Year")
+    st.subheader("Monthly Summary (by Year)")
     df['year'] = df['date'].dt.year
     for year in sorted(df['year'].unique(), reverse=True):
         with st.expander(f"{year} – Click to Expand"):
