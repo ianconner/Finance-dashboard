@@ -165,7 +165,7 @@ def fetch_6mo_return(ticker):
             return (data['Close'].iloc[-1] / data['Close'].iloc[0] - 1) * 100
     except:
         pass
-    return None  # Return None to distinguish from 0.0
+    return None  # None = no data
 
 @st.cache_data(ttl=3600)
 def fetch_ticker(ticker, period="1d"):
@@ -188,24 +188,35 @@ def analyze_portfolio(df_port):
         return None, 0, []
 
     df = df_port[required].copy()
-    df = df.dropna(subset=['Symbol', 'Quantity', 'Last Price', 'Current Value'])
 
+    # --- BULLETPROOF CLEANING ---
+    df = df.dropna(subset=['Symbol', 'Quantity', 'Last Price', 'Current Value'])
+    df = df[df['Symbol'].astype(str).str.strip() != '']
+    df = df[~df['Symbol'].astype(str).str.strip().str.lower().isin(['symbol', 'nan', 'account number'])]
+
+    if df.empty:
+        st.error("No valid holdings found. Check CSV for blank rows or duplicate headers.")
+        return None, 0, []
+
+    # --- Parse safely ---
     df['ticker'] = df['Symbol'].astype(str).str.upper().str.strip()
     df['shares'] = pd.to_numeric(df['Quantity'], errors='coerce')
     df['price'] = pd.to_numeric(df['Last Price'], errors='coerce')
     df['cost_basis'] = pd.to_numeric(df['Average Cost Basis'], errors='coerce')
-    df['market_value'] = pd.to_numeric(df['Current Value'].astype(str).str.replace(',', ''), errors='coerce')
+    df['market_value'] = pd.to_numeric(
+        df['Current Value'].astype(str).str.replace(',', ''), errors='coerce'
+    )
 
-    df = df.dropna(subset=['shares', 'price', 'market_value'])
+    df = df.dropna(subset=['shares', 'price', 'market_value', 'cost_basis'])
     if df.empty:
-        st.error("No valid rows after cleaning.")
+        st.error("No valid numeric data after cleaning.")
         return None, 0, []
 
     total = df['market_value'].sum()
     df['allocation'] = df['market_value'] / total * 100
     df['gain'] = df['market_value'] - (df['shares'] * df['cost_basis'])
 
-    # 6mo return
+    # --- 6mo return ---
     df['6mo_return'] = None
     df['6mo_note'] = "N/A (mutual fund)"
     for i, row in df.iterrows():
@@ -379,7 +390,10 @@ with st.sidebar:
     port_file = st.file_uploader("Fidelity CSV", type="csv", key="port")
     df_port = pd.DataFrame()
     if port_file:
-        df_port, health, recs = analyze_portfolio(pd.read_csv(port_file))
+        raw_df = pd.read_csv(port_file)
+        # DEBUG: Remove after confirming
+        st.write("DEBUG: CSV has", len(raw_df), "rows →", len(raw_df.dropna(subset=['Symbol'])), "with Symbol")
+        df_port, health, recs = analyze_portfolio(raw_df)
         if df_port is not None:
             st.dataframe(df_port[['ticker', 'allocation', '6mo_note']].style.format({
                 'allocation': '{:.1f}%'
