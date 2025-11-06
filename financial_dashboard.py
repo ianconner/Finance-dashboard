@@ -193,7 +193,6 @@ def analyze_portfolio(df_port):
     df = df.dropna(subset=required, how='any')
     df = df[df['Symbol'].astype(str).str.strip() != '']
     df = df[~df['Symbol'].astype(str).str.strip().str.lower().isin(['symbol', 'account number', 'nan', 'account name'])]
-    df = df[df['Quantity'].astype(str).str.strip() != '']
 
     if df.empty:
         st.error("No valid holdings found. CSV may have blank rows or headers.")
@@ -201,13 +200,15 @@ def analyze_portfolio(df_port):
 
     df = df.reset_index(drop=True)  # CRITICAL: Prevent nan index
 
+    # Clean numeric columns by removing $ and ,
+    for col in ['Quantity', 'Last Price', 'Current Value', 'Average Cost Basis']:
+        df[col] = df[col].astype(str).str.replace(r'[\$,]', '', regex=True)
+
     df['ticker'] = df['Symbol'].astype(str).str.upper().str.strip()
     df['shares'] = pd.to_numeric(df['Quantity'], errors='coerce')
     df['price'] = pd.to_numeric(df['Last Price'], errors='coerce')
     df['cost_basis'] = pd.to_numeric(df['Average Cost Basis'], errors='coerce')
-    df['market_value'] = pd.to_numeric(
-        df['Current Value'].astype(str).str.replace(',', ''), errors='coerce'
-    )
+    df['market_value'] = pd.to_numeric(df['Current Value'], errors='coerce')
 
     df = df.dropna(subset=['shares', 'price', 'market_value', 'cost_basis'])
     if df.empty:
@@ -233,7 +234,7 @@ def analyze_portfolio(df_port):
     over = df[df['allocation'] > 25]['ticker'].tolist()
     if over:
         recs.append(f"Overweight: {', '.join(over)} — consider trimming.")
-    if not df.empty:
+    if not df.empty and df['6mo_return'].notna().any():
         top = df.loc[df['6mo_return'].idxmax()]
         recs.append(f"Hot pick: {top['ticker']} ({top['6mo_note']}) — {top['allocation']:.1f}%")
 
