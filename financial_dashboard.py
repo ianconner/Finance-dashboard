@@ -165,7 +165,7 @@ def fetch_6mo_return(ticker):
             return (data['Close'].iloc[-1] / data['Close'].iloc[0] - 1) * 100
     except:
         pass
-    return None  # None = no data
+    return None
 
 @st.cache_data(ttl=3600)
 def fetch_ticker(ticker, period="1d"):
@@ -189,16 +189,18 @@ def analyze_portfolio(df_port):
 
     df = df_port[required].copy()
 
-    # --- BULLETPROOF CLEANING ---
-    df = df.dropna(subset=['Symbol', 'Quantity', 'Last Price', 'Current Value'])
+    # --- NUCLEAR CLEANING ---
+    df = df.dropna(subset=required, how='any')
     df = df[df['Symbol'].astype(str).str.strip() != '']
-    df = df[~df['Symbol'].astype(str).str.strip().str.lower().isin(['symbol', 'nan', 'account number'])]
+    df = df[~df['Symbol'].astype(str).str.strip().str.lower().isin(['symbol', 'account number', 'nan', 'account name'])]
+    df = df[df['Quantity'].astype(str).str.strip() != '']
 
     if df.empty:
-        st.error("No valid holdings found. Check CSV for blank rows or duplicate headers.")
+        st.error("No valid holdings found. CSV may have blank rows or headers.")
         return None, 0, []
 
-    # --- Parse safely ---
+    df = df.reset_index(drop=True)  # CRITICAL: Prevent nan index
+
     df['ticker'] = df['Symbol'].astype(str).str.upper().str.strip()
     df['shares'] = pd.to_numeric(df['Quantity'], errors='coerce')
     df['price'] = pd.to_numeric(df['Last Price'], errors='coerce')
@@ -209,14 +211,13 @@ def analyze_portfolio(df_port):
 
     df = df.dropna(subset=['shares', 'price', 'market_value', 'cost_basis'])
     if df.empty:
-        st.error("No valid numeric data after cleaning.")
+        st.error("No valid numeric data.")
         return None, 0, []
 
     total = df['market_value'].sum()
     df['allocation'] = df['market_value'] / total * 100
     df['gain'] = df['market_value'] - (df['shares'] * df['cost_basis'])
 
-    # --- 6mo return ---
     df['6mo_return'] = None
     df['6mo_note'] = "N/A (mutual fund)"
     for i, row in df.iterrows():
@@ -234,7 +235,7 @@ def analyze_portfolio(df_port):
         recs.append(f"Overweight: {', '.join(over)} — consider trimming.")
     if not df.empty:
         top = df.loc[df['6mo_return'].idxmax()]
-        recs.append(f"Hot pick: {top['ticker']} ({top['6mo_note']}) — {top['allocation']:.1f}% of portfolio")
+        recs.append(f"Hot pick: {top['ticker']} ({top['6mo_note']}) — {top['allocation']:.1f}%")
 
     return df, health, recs
 
@@ -391,7 +392,6 @@ with st.sidebar:
     df_port = pd.DataFrame()
     if port_file:
         raw_df = pd.read_csv(port_file)
-        # DEBUG: Remove after confirming
         st.write("DEBUG: CSV has", len(raw_df), "rows →", len(raw_df.dropna(subset=['Symbol'])), "with Symbol")
         df_port, health, recs = analyze_portfolio(raw_df)
         if df_port is not None:
