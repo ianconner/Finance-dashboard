@@ -23,7 +23,7 @@ from sqlalchemy.orm import declarative_base, sessionmaker
 # ----------------------------------------------------------------------
 # --------------------------- CONSTANTS --------------------------------
 # ----------------------------------------------------------------------
-PEER_NET_WORTH_40YO = 189_000          # 2023 BLS median 35-44
+PEER_NET_WORTH_40YO = 189_000
 HISTORICAL_SP_MONTHLY = 0.07 / 12
 
 # ----------------------------------------------------------------------
@@ -165,11 +165,10 @@ def fetch_6mo_return(ticker):
             return (data['Close'].iloc[-1] / data['Close'].iloc[0] - 1) * 100
     except:
         pass
-    return 0.0
+    return None  # Return None to distinguish from 0.0
 
 @st.cache_data(ttl=3600)
 def fetch_ticker(ticker, period="1d"):
-    """Used for S&P 500, sector ETFs, etc."""
     try:
         data = yf.download(ticker, period=period, progress=False, auto_adjust=True)
         if not data.empty and 'Close' in data.columns:
@@ -182,7 +181,7 @@ def fetch_ticker(ticker, period="1d"):
 # ----------------------- PORTFOLIO ANALYZER ---------------------------
 # ----------------------------------------------------------------------
 def analyze_portfolio(df_port):
-    required = ['Symbol', 'Quantity', 'Last Price', 'Average Cost Basis', 'Current Value']
+    required = ['Symbol', 'Quantity', 'Last Price', 'Current Value', 'Average Cost Basis']
     missing = [c for c in required if c not in df_port.columns]
     if missing:
         st.error(f"Missing columns: {', '.join(missing)}")
@@ -207,13 +206,13 @@ def analyze_portfolio(df_port):
     df['gain'] = df['market_value'] - (df['shares'] * df['cost_basis'])
 
     # 6mo return
-    df['6mo_return'] = 0.0
-    df['6mo_note'] = ""
+    df['6mo_return'] = None
+    df['6mo_note'] = "N/A (mutual fund)"
     for i, row in df.iterrows():
         ret = fetch_6mo_return(row['ticker'])
-        df.at[i, '6mo_return'] = ret
-        if ret == 0.0:
-            df.at[i, '6mo_note'] = "N/A (mutual fund or no data)"
+        if ret is not None:
+            df.at[i, '6mo_return'] = ret
+            df.at[i, '6mo_note'] = f"+{ret:.1f}% (6mo)"
 
     std = df['allocation'].std()
     health = max(0, min(100, 100 - std * 8))
@@ -224,31 +223,9 @@ def analyze_portfolio(df_port):
         recs.append(f"Overweight: {', '.join(over)} — consider trimming.")
     if not df.empty:
         top = df.loc[df['6mo_return'].idxmax()]
-        recs.append(f"Hot pick: {top['ticker']} (+{top['6mo_return']:.1f}%) — {top['allocation']:.1f}% of portfolio")
+        recs.append(f"Hot pick: {top['ticker']} ({top['6mo_note']}) — {top['allocation']:.1f}% of portfolio")
 
     return df, health, recs
-
-# ----------------------------------------------------------------------
-# ----------------------- TREND ALERTS ---------------------------------
-# ----------------------------------------------------------------------
-SECTOR_ETFS = {
-    "Tech": "XLK", "Health": "XLV", "Finance": "XLF",
-    "Energy": "XLE", "Consumer": "XLY", "Industrials": "XLI", "AI": "BOTZ"
-}
-MEME_GIFS = [
-    "https://media.giphy.com/media/l0MYC0LdjMMD9R3n2/giphy.gif",
-    "https://media.giphy.com/media/3o7btPCcdNniyf0ArS/giphy.gif"
-]
-
-def get_trend_alerts():
-    alerts = []
-    for name, ticker in SECTOR_ETFS.items():
-        hist = fetch_ticker(ticker, period="1mo")
-        if hist is not None and len(hist) > 1:
-            ret = (hist['price'].iloc[-1] / hist['price'].iloc[0] - 1) * 100
-            if ret > 8:
-                alerts.append((name, ret, random.choice(MEME_GIFS)))
-    return alerts
 
 # ----------------------------------------------------------------------
 # ----------------------- AI REBALANCE BOT -----------------------------
@@ -261,7 +238,7 @@ def get_ai_rebalance(df_port, df_net):
     try:
         api_key = st.secrets.get("OPENAI_API_KEY", "")
         if not api_key:
-            return "Add `OPENAI_API_KEY` in **Streamlit Cloud → Settings → Secrets**."
+            return "**OPENAI_API_KEY missing!** Add it in **Streamlit → Settings → Secrets** as `OPENAI_API_KEY = sk-...`"
         client = openai.OpenAI(api_key=api_key)
         resp = client.chat.completions.create(
             model="gpt-3.5-turbo",
@@ -404,8 +381,8 @@ with st.sidebar:
     if port_file:
         df_port, health, recs = analyze_portfolio(pd.read_csv(port_file))
         if df_port is not None:
-            st.dataframe(df_port[['ticker', 'allocation', '6mo_return']].style.format({
-                'allocation': '{:.1f}%', '6mo_return': '{:.1f}%'
+            st.dataframe(df_port[['ticker', 'allocation', '6mo_note']].style.format({
+                'allocation': '{:.1f}%'
             }))
             st.metric("Portfolio Health", f"{health:.0f}/100")
             for r in recs:
