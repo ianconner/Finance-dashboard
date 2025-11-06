@@ -25,9 +25,8 @@ from sqlalchemy.orm import declarative_base, sessionmaker
 # --------------------------- CONSTANTS --------------------------------
 # ----------------------------------------------------------------------
 HISTORICAL_SP_ANNUAL_REAL = 0.07
-HISTORICAL_SP_MONTHLY = HISTORICAL_SP_ANNUAL_REAL / 12
 VOLATILITY_STD = 0.04
-PEER_NET_WORTH_40YO = 150_000          # BLS median 35-44
+PEER_NET_WORTH_40YO = 150_000  # BLS median 35-44
 
 # ----------------------------------------------------------------------
 # --------------------------- DATABASE SETUP ---------------------------
@@ -52,14 +51,6 @@ try:
         person = Column(String, primary_key=True)
         account_type = Column(String, primary_key=True)
         __table_args__ = (PrimaryKeyConstraint('person', 'account_type'),)
-
-    class Contribution(Base):
-        __tablename__ = "contributions"
-        date = Column(Date, primary_key=True)
-        person = Column(String, primary_key=True)
-        account_type = Column(String, primary_key=True)
-        contribution = Column(Float)
-        __table_args__ = (PrimaryKeyConstraint('date', 'person', 'account_type'),)
 
     class Goal(Base):
         __tablename__ = "goals"
@@ -118,18 +109,6 @@ def add_monthly_update(date, person, acc_type, value):
     sess.commit()
     sess.close()
 
-def add_contribution(date, person, acc_type, amount):
-    sess = get_session()
-    stmt = insert(Contribution.__table__).values(
-        date=date, person=person, account_type=acc_type, contribution=amount
-    ).on_conflict_do_update(
-        index_elements=['date', 'person', 'account_type'],
-        set_={'contribution': amount}
-    )
-    sess.execute(stmt)
-    sess.commit()
-    sess.close()
-
 def get_monthly_updates():
     sess = get_session()
     rows = sess.query(MonthlyUpdate).all()
@@ -137,16 +116,6 @@ def get_monthly_updates():
     return pd.DataFrame([
         {'date': r.date, 'person': r.person,
          'account_type': r.account_type, 'value': r.value}
-        for r in rows
-    ])
-
-def get_contributions():
-    sess = get_session()
-    rows = sess.query(Contribution).all()
-    sess.close()
-    return pd.DataFrame([
-        {'date': r.date, 'person': r.person,
-         'account_type': r.account_type, 'contribution': r.contribution}
         for r in rows
     ])
 
@@ -178,7 +147,7 @@ def delete_goal(name):
     sess.close()
 
 # ----------------------------------------------------------------------
-# ----------------------- YFINANCE HELPER (only for benchmarks) -------
+# ----------------------- YFINANCE HELPER ------------------------------
 # ----------------------------------------------------------------------
 @st.cache_data(ttl=3600)
 def fetch_ticker(ticker, period="1d", interval="1d"):
@@ -195,61 +164,51 @@ def fetch_ticker(ticker, period="1d", interval="1d"):
 # ----------------------- PORTFOLIO ANALYZER ---------------------------
 # ----------------------------------------------------------------------
 def analyze_portfolio(df_port):
-    """
-    Uses Fidelity CSV columns:
-        Symbol, Quantity, Last Price, Average Cost Basis, Current Value
-    """
     required = ['Symbol', 'Quantity', 'Last Price', 'Average Cost Basis', 'Current Value']
     missing = [c for c in required if c not in df_port.columns]
     if missing:
         st.error(f"CSV missing columns: {', '.join(missing)}")
         return None, None, None
 
-    # ---- SAFE TYPE CONVERSION ----
-    df_port = df_port[required].copy()
-    df_port = df_port.dropna(subset=['Symbol', 'Quantity', 'Last Price', 'Current Value'])
+    df = df_port[required].copy()
+    df = df.dropna(subset=['Symbol', 'Quantity', 'Last Price', 'Current Value'])
 
-    # Convert Symbol to string safely
-    df_port['ticker'] = df_port['Symbol'].astype(str).str.upper().str.strip()
-
-    # Convert numeric columns safely
-    df_port['shares'] = pd.to_numeric(df_port['Quantity'], errors='coerce')
-    df_port['price'] = pd.to_numeric(df_port['Last Price'], errors='coerce')
-    df_port['cost_basis'] = pd.to_numeric(df_port['Average Cost Basis'], errors='coerce')
-    df_port['market_value'] = pd.to_numeric(
-        df_port['Current Value'].astype(str).str.replace(',', ''), errors='coerce'
+    df['ticker'] = df['Symbol'].astype(str).str.upper().str.strip()
+    df['shares'] = pd.to_numeric(df['Quantity'], errors='coerce')
+    df['price'] = pd.to_numeric(df['Last Price'], errors='coerce')
+    df['cost_basis'] = pd.to_numeric(df['Average Cost Basis'], errors='coerce')
+    df['market_value'] = pd.to_numeric(
+        df['Current Value'].astype(str).str.replace(',', ''), errors='coerce'
     )
 
-    df_port = df_port.dropna(subset=['shares', 'price', 'cost_basis', 'market_value'])
-    if df_port.empty:
+    df = df.dropna(subset=['shares', 'price', 'cost_basis', 'market_value'])
+    if df.empty:
         st.error("No valid rows after cleaning.")
         return None, None, None
 
-    total_value = df_port['market_value'].sum()
-    df_port['allocation'] = df_port['market_value'] / total_value * 100
-    df_port['gain'] = df_port['market_value'] - (df_port['shares'] * df_port['cost_basis'])
+    total_value = df['market_value'].sum()
+    df['allocation'] = df['market_value'] / total_value * 100
+    df['gain'] = df['market_value'] - (df['shares'] * df['cost_basis'])
 
-    # 6-month return (optional)
-    df_port['6mo_return'] = 0.0
-    for i, row in df_port.iterrows():
+    # 6-month return (optional - try yfinance)
+    df['6mo_return'] = 0.0
+    for i, row in df.iterrows():
         hist = fetch_ticker(row['ticker'], period="6mo")
         if hist is not None and len(hist) > 1:
-            df_port.at[i, '6mo_return'] = (hist['price'].iloc[-1] / hist['price'].iloc[0] - 1) * 100
+            df.at[i, '6mo_return'] = (hist['price'].iloc[-1] / hist['price'].iloc[0] - 1) * 100
 
-    # Health score
-    std_alloc = df_port['allocation'].std()
+    std_alloc = df['allocation'].std()
     health = max(0, min(100, 100 - std_alloc * 8))
 
-    # Recommendations
     recs = []
-    over = df_port[df_port['allocation'] > 25]['ticker'].tolist()
+    over = df[df['allocation'] > 25]['ticker'].tolist()
     if over:
         recs.append(f"Overweight: {', '.join(over)} — consider trimming.")
-    if not df_port.empty:
-        top = df_port.loc[df_port['6mo_return'].idxmax()]
+    if not df.empty:
+        top = df.loc[df['6mo_return'].idxmax()]
         recs.append(f"Hot pick: {top['ticker']} (+{top['6mo_return']:.1f}%)")
 
-    return df_port, health, recs
+    return df, health, recs
 
 # ----------------------------------------------------------------------
 # ----------------------- TREND ALERTS ---------------------------------
@@ -300,13 +259,12 @@ def get_ai_rebalance(df_port, df_net):
 # ----------------------- DIVIDEND SNOWBALL ----------------------------
 # ----------------------------------------------------------------------
 def dividend_snowball(df_port, years=10):
-    if df_port.empty:
+    if df_port.empty or 'market_value' not in df_port.columns:
         return None
     total = df_port['market_value'].sum()
-    ann_yield = 0.02
     values = [total]
     for _ in range(years):
-        div = values[-1] * ann_yield
+        div = values[-1] * 0.02  # Conservative yield
         values.append(values[-1] + div)
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=list(range(2025, 2025+years+1)), y=values,
@@ -347,7 +305,7 @@ def ai_projections(df_net, horizon=24):
         forecast = np.array(forecast) * 0.95
         lower *= 0.95
         upper *= 0.95
-    except Exception:
+    except:
         forecast = np.full(horizon, y[-1] * 1.05)
         lower = np.full(horizon, y[-1] * 0.95)
         upper = np.full(horizon, y[-1] * 1.05)
@@ -369,9 +327,8 @@ st.title("Personal Finance Tracker")
 
 # Load data
 df = get_monthly_updates()
-df_contrib = get_contributions()
 
-# EARLY df_net (prevents NameError)
+# EARLY df_net
 df_net = pd.DataFrame(columns=['date', 'value'])
 if not df.empty:
     df["date"] = pd.to_datetime(df["date"])
@@ -385,23 +342,19 @@ if not df.empty:
 
 # ONE-TIME SEED
 if df.empty:
-    st.subheader("Seed Database with CSV (One-Time)")
+    st.subheader("Seed Database (One-Time)")
     uploaded = st.file_uploader("Upload CSV", type="csv")
-    if uploaded:
-        try:
-            up = pd.read_csv(uploaded)
-            if all(c in up.columns for c in ['date', 'person', 'account_type', 'value']):
-                if st.button("Import CSV"):
-                    for _, r in up.iterrows():
-                        d = pd.to_datetime(r['date'], errors='coerce').date()
-                        if pd.isna(d): continue
-                        add_monthly_update(d, str(r['person']), str(r['account_type']), float(r['value']))
-                    st.success("Seeded!")
-                    st.rerun()
-            else:
-                st.error("CSV needs: date, person, account_type, value")
-        except Exception as e:
-            st.error(f"CSV error: {e}")
+    if uploaded and st.button("Import"):
+        up = pd.read_csv(uploaded)
+        if all(c in up.columns for c in ['date', 'person', 'account_type', 'value']):
+            for _, r in up.iterrows():
+                d = pd.to_datetime(r['date'], errors='coerce').date()
+                if pd.isna(d): continue
+                add_monthly_update(d, str(r['person']), str(r['account_type']), float(r['value']))
+            st.success("Seeded!")
+            st.rerun()
+        else:
+            st.error("Need: date, person, account_type, value")
 
 # ------------------------------------------------------------------
 # SIDEBAR
@@ -415,27 +368,20 @@ with st.sidebar:
     with col1:
         date_in = st.date_input("Date", value=pd.Timestamp("today").date())
     with col2:
-        val = st.number_input("Value ($)", min_value=0.0, format="%.2f")
+        val = st.number_input("Value ($)", min_value=0.0)
     if st.button("Save"):
         add_monthly_update(date_in, person, acct, float(val))
         st.success("Saved!")
         st.rerun()
 
-    st.subheader("Add Contribution")
-    contrib = st.number_input("Amount ($)", min_value=0.0, format="%.2f")
-    if st.button("Save Contribution"):
-        add_contribution(date_in, person, acct, float(contrib))
-        st.success("Contribution saved!")
-        st.rerun()
-
     st.subheader("Add Goal")
-    g_name = st.text_input("Goal name")
+    g_name = st.text_input("Name")
     g_target = st.number_input("Target ($)", min_value=0.0)
-    g_year = st.number_input("By year", min_value=2000, step=1)
+    g_year = st.number_input("By Year", min_value=2000, step=1)
     if st.button("Add Goal"):
         if g_name:
             add_goal(g_name, g_target, g_year)
-            st.success("Goal added!")
+            st.success("Added!")
             st.rerun()
 
     if st.button("Reset DB (Admin)"):
@@ -444,22 +390,22 @@ with st.sidebar:
 
     # --- Portfolio Analyzer ---
     st.subheader("1. Portfolio Analyzer")
-    port_file = st.file_uploader("Upload Fidelity CSV", type="csv", key="port")
+    port_file = st.file_uploader("Fidelity CSV", type="csv", key="port")
     df_port = pd.DataFrame()
+    health = 0
+    recs = []
     if port_file:
         try:
-            df_port = pd.read_csv(port_file)
-            df_res, health, recs = analyze_portfolio(df_port)
-            if df_res is not None:
-                st.dataframe(
-                    df_res[['ticker', 'allocation', '6mo_return']]
-                    .style.format({'allocation': '{:.1f}%', '6mo_return': '{:.1f}%'})
-                )
-                st.metric("Health Score", f"{health:.0f}/100")
+            df_port, health, recs = analyze_portfolio(pd.read_csv(port_file))
+            if not df_port.empty:
+                st.dataframe(df_port[['ticker', 'allocation', '6mo_return']].style.format({
+                    'allocation': '{:.1f}%', '6mo_return': '{:.1f}%'
+                }))
+                st.metric("Health", f"{health:.0f}/100")
                 for r in recs:
                     st.info(r)
             else:
-                st.error("No valid holdings.")
+                st.error("No valid data.")
         except Exception as e:
             st.error(f"CSV error: {e}")
 
@@ -471,7 +417,7 @@ with st.sidebar:
             st.success(f"{name} +{ret:.1f}% MoM")
             st.image(gif, width=100)
     else:
-        st.info("No hot sectors right now.")
+        st.info("No hot sectors.")
 
     # --- AI Rebalance Bot ---
     st.subheader("7. AI Rebalance Bot")
@@ -482,6 +428,7 @@ with st.sidebar:
             with st.spinner("Thinking..."):
                 advice = get_ai_rebalance(df_port, df_net)
                 st.markdown(advice)
+        st.button("Back to Dashboard")
 
     # --- Dividend Snowball ---
     st.subheader("8. Dividend Snowball")
@@ -489,14 +436,14 @@ with st.sidebar:
         fig = dividend_snowball(df_port)
         if fig:
             st.plotly_chart(fig, use_container_width=True)
+        st.button("Back to Dashboard")
 
-    # --- Peer Benchmark (no balloons) ---
+    # --- Peer Benchmark ---
     st.subheader("9. Peer Benchmark")
     if not df_net.empty:
         cur = df_net["value"].iloc[-1]
         pct, vs = peer_benchmark(cur)
         st.metric("vs. Avg 40yo", f"Top {100-int(pct)}%", delta=f"{vs:+,}")
-        # Removed st.balloons()
     else:
         st.info("Enter data to see peer rank.")
 
@@ -521,7 +468,7 @@ if not df.empty:
 
     # --- Net Worth Chart ---
     st.subheader("Family Net Worth")
-    fig = px.line(df_net, x="date", y="value", title="Family Net Worth",
+    fig = px.line(df_net, x="date", y="value", title="Net Worth",
                   labels={"value": "Total ($)"})
     max_val = df_net['value'].max()
     fig.update_yaxes(range=[0, np.ceil(max_val/50_000)*50_000], tickformat="$,.0f")
@@ -536,27 +483,18 @@ if not df.empty:
     # --- AI Projections ---
     st.subheader("AI Growth Projections")
     horizon = st.slider("Months Ahead", 12, 60, 24)
-    arima_f, ar_lower, ar_upper, lr_f, rf_f = ai_projections(df_net, horizon)
+    arima_f, ar_l, ar_u, lr_f, rf_f = ai_projections(df_net, horizon)
     if arima_f is not None:
-        future_dates = pd.date_range(df_net["date"].max() + pd.DateOffset(months=1),
-                                     periods=horizon, freq='ME')
-        fig_proj = go.Figure()
-        fig_proj.add_trace(go.Scatter(x=df_net["date"], y=df_net["value"],
-                                      name="Historical", line=dict(color="blue")))
-        fig_proj.add_trace(go.Scatter(x=future_dates, y=arima_f,
-                                      name="ARIMA", line=dict(color="green")))
-        fig_proj.add_trace(go.Scatter(x=future_dates, y=ar_lower, fill=None,
-                                      line=dict(color="lightgreen", dash="dash"),
-                                      showlegend=False))
-        fig_proj.add_trace(go.Scatter(x=future_dates, y=ar_upper,
-                                      fill='tonexty', line=dict(color="lightgreen"),
-                                      name="ARIMA CI"))
-        fig_proj.add_trace(go.Scatter(x=future_dates, y=lr_f,
-                                      name="Linear", line=dict(color="orange")))
-        fig_proj.add_trace(go.Scatter(x=future_dates, y=rf_f,
-                                      name="Random Forest", line=dict(color="red")))
-        fig_proj.update_layout(title=f"Projections ({horizon} months)", yaxis_title="$")
-        st.plotly_chart(fig_proj, use_container_width=True)
+        future = pd.date_range(df_net["date"].max() + pd.DateOffset(months=1),
+                               periods=horizon, freq='ME')
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=df_net["date"], y=df_net["value"], name="Historical"))
+        fig.add_trace(go.Scatter(x=future, y=arima_f, name="ARIMA"))
+        fig.add_trace(go.Scatter(x=future, y=ar_l, fill=None, line=dict(dash="dash"), showlegend=False))
+        fig.add_trace(go.Scatter(x=future, y=ar_u, fill='tonexty', name="CI"))
+        fig.add_trace(go.Scatter(x=future, y=lr_f, name="Linear"))
+        fig.add_trace(go.Scatter(x=future, y=rf_f, name="RF"))
+        st.plotly_chart(fig, use_container_width=True)
 
     # --- Goals ---
     st.subheader("Financial Goals")
@@ -583,14 +521,11 @@ if not df.empty:
 
     # --- Delete Entry ---
     st.subheader("Delete Entry")
-    choice = st.selectbox("Select", df.index,
-                          format_func=lambda i: f"{df.loc[i,'date']} – {df.loc[i,'person']} – ${df.loc[i,'value']:,.0f}")
+    choice = st.selectbox("Select", df.index, format_func=lambda i: f"{df.loc[i,'date']} – ${df.loc[i,'value']:,.0f}")
     if st.button("Delete"):
         row = df.loc[choice]
         sess = get_session()
-        sess.query(MonthlyUpdate).filter_by(
-            date=row["date"], person=row["person"], account_type=row["account_type"]
-        ).delete()
+        sess.query(MonthlyUpdate).filter_by(date=row["date"], person=row["person"], account_type=row["account_type"]).delete()
         sess.commit()
         sess.close()
         st.success("Deleted!")
