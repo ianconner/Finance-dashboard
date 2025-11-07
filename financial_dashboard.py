@@ -12,6 +12,9 @@ from statsmodels.tsa.arima.model import ARIMA
 from sklearn.linear_model import LinearRegression
 from sklearn.ensemble import RandomForestRegressor
 
+# Retries for yfinance
+from tenacity import retry, stop_after_attempt, wait_fixed
+
 # SQLAlchemy
 from sqlalchemy import (
     create_engine, Column, String, Float, Date, Integer,
@@ -150,6 +153,7 @@ def delete_goal(name):
 # ----------------------- YFINANCE HELPERS -----------------------------
 # ----------------------------------------------------------------------
 @st.cache_data(ttl=3600)
+@retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
 def fetch_price(ticker):
     try:
         data = yf.download(ticker, period="1d", progress=False)
@@ -160,6 +164,7 @@ def fetch_price(ticker):
     return None
 
 @st.cache_data(ttl=3600)
+@retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
 def fetch_6mo_return(ticker):
     try:
         data = yf.download(ticker, period="6mo", progress=False)
@@ -170,6 +175,7 @@ def fetch_6mo_return(ticker):
     return None
 
 @st.cache_data(ttl=3600)
+@retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
 def fetch_ticker(ticker, period="1d"):
     try:
         data = yf.download(ticker, period=period, progress=False, auto_adjust=True)
@@ -222,12 +228,14 @@ def analyze_portfolio(df_port):
     df['gain'] = df['market_value'] - (df['shares'] * df['cost_basis'])
 
     df['6mo_return'] = None
-    df['6mo_note'] = "N/A (mutual fund)"
+    df['6mo_note'] = "N/A (fetch failed)"
     for i, row in df.iterrows():
         ret = fetch_6mo_return(row['ticker'])
         if ret is not None:
             df.at[i, '6mo_return'] = ret
             df.at[i, '6mo_note'] = f"+{ret:.1f}% (6mo)"
+        else:
+            df.at[i, '6mo_note'] = "N/A (fetch failed)"
 
     std = df['allocation'].std()
     health = max(0, min(100, 100 - std * 8))
@@ -237,7 +245,8 @@ def analyze_portfolio(df_port):
     if over:
         recs.append(f"Overweight: {', '.join(over)} — consider trimming.")
     if not df.empty and df['6mo_return'].notna().any():
-        top = df.loc[df['6mo_return'].idxmax()]
+        top_idx = df['6mo_return'].idxmax()
+        top = df.loc[top_idx]
         recs.append(f"Hot pick: {top['ticker']} ({top['6mo_note']}) — {top['allocation']:.1f}%")
 
     return df, health, recs
