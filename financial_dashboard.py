@@ -3,8 +3,7 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
-from datetime import datetime
-import yfinance as yf
+from datetime import datetime, timedelta
 import requests
 import random
 
@@ -13,7 +12,7 @@ from statsmodels.tsa.arima.model import ARIMA
 from sklearn.linear_model import LinearRegression
 from sklearn.ensemble import RandomForestRegressor
 
-# Retries for yfinance
+# Retries for API calls
 from tenacity import retry, stop_after_attempt, wait_fixed
 
 # SQLAlchemy
@@ -31,12 +30,6 @@ import google.generativeai as genai
 # ----------------------------------------------------------------------
 PEER_NET_WORTH_40YO = 189_000
 HISTORICAL_SP_MONTHLY = 0.07 / 12
-
-# Global session for yfinance with User-Agent to avoid blocks
-session = requests.Session()
-session.headers.update({
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-})
 
 # ----------------------------------------------------------------------
 # --------------------------- DATABASE SETUP ---------------------------
@@ -157,39 +150,59 @@ def delete_goal(name):
     sess.close()
 
 # ----------------------------------------------------------------------
-# ----------------------- YFINANCE HELPERS -----------------------------
+# ----------------------- ALPHA VANTAGE HELPERS -----------------------
 # ----------------------------------------------------------------------
+@st.cache_data(ttl=3600)
+@retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
+def fetch_6mo_return(ticker):
+    api_key = st.secrets.get("ALPHA_VANTAGE_API_KEY", "")
+    if not api_key:
+        st.warning("ALPHA_VANTAGE_API_KEY missing in secrets. Get free key at https://www.alphavantage.co/support/#api-key")
+        return None
+    url = f"https://www.alphavantage.co/query?function=TIME_SERIES_DAILY_ADJUSTED&symbol={ticker}&outputsize=full&apikey={api_key}"
+    try:
+        response = requests.get(url)
+        data = response.json()
+        if "Error Message" in data or "Note" in data:
+            return None
+        if "Time Series (Daily)" not in data:
+            return None
+        ts = data["Time Series (Daily)"]
+        dates = sorted(ts.keys(), reverse=True)
+        if len(dates) < 126:  # Approx 6 months of trading days
+            return None
+        latest_price = float(ts[dates[0]]["5. adjusted close"])
+        past_price = float(ts[dates[125]]["5. adjusted close"])
+        return (latest_price / past_price - 1) * 100
+    except Exception as e:
+        st.warning(f"Alpha Vantage error for {ticker}: {e}")
+        return None
+
+# ----------------------------------------------------------------------
+# ----------------------- YFINANCE HELPERS (FALLBACK) -----------------
+# ----------------------------------------------------------------------
+import yfinance as yf
+
 @st.cache_data(ttl=3600)
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
 def fetch_price(ticker):
     try:
-        data = yf.download(ticker, period="1d", progress=False, session=session)
+        data = yf.download(ticker, period="1d", progress=False)
         if not data.empty and 'Close' in data.columns:
             return data['Close'].iloc[-1]
-    except Exception as e:
-        st.warning(f"Fetch price error for {ticker}: {e}")
-    return None
-
-@st.cache_data(ttl=3600)
-@retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
-def fetch_6mo_return(ticker):
-    try:
-        data = yf.download(ticker, period="6mo", progress=False, session=session)
-        if len(data) > 1 and not data.empty and 'Close' in data.columns:
-            return (data['Close'].iloc[-1] / data['Close'].iloc[0] - 1) * 100
-    except Exception as e:
-        st.warning(f"Fetch 6mo return error for {ticker}: {e}")
+    except:
+        pass
     return None
 
 @st.cache_data(ttl=3600)
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
 def fetch_ticker(ticker, period="1d"):
     try:
-        data = yf.download(ticker, period=period, progress=False, auto_adjust=True, session=session)
+        data = yf.download(ticker, period=period, progress=False, auto_adjust=True)
         if not data.empty and 'Close' in data.columns:
             return data[['Close']].rename(columns={'Close': 'price'})
-    except Exception as e:
-        st.warning(f"Fetch ticker error for {ticker}: {e}")
+    except:
+        pass
     return None
 
 # ----------------------------------------------------------------------
