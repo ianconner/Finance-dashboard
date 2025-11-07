@@ -5,7 +5,6 @@ import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime
 import yfinance as yf
-import openai
 import random
 
 # AI/ML
@@ -19,6 +18,9 @@ from sqlalchemy import (
     PrimaryKeyConstraint, insert
 )
 from sqlalchemy.orm import declarative_base, sessionmaker
+
+# Google Gemini
+import google.generativeai as genai
 
 # ----------------------------------------------------------------------
 # --------------------------- CONSTANTS --------------------------------
@@ -249,18 +251,15 @@ def get_ai_rebalance(df_port, df_net):
     current = df_net['value'].iloc[-1] if not df_net.empty else 0
     prompt = f"Net worth: ${current:,.0f}. Portfolio: {df_port[['ticker', 'allocation']].round(1).to_dict('records')}. Suggest 1-2 rebalance moves. Fun, bold, emojis."
     try:
-        api_key = st.secrets.get("OPENAI_API_KEY", "")
+        api_key = st.secrets.get("GOOGLE_API_KEY", "")
         if not api_key:
-            return "**OPENAI_API_KEY missing!** Add it in **Streamlit → Settings → Secrets** as `OPENAI_API_KEY = sk-...`"
-        client = openai.OpenAI(api_key=api_key)
-        resp = client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=150
-        )
-        return resp.choices[0].message.content
+            return "**GOOGLE_API_KEY missing!** Add it in **Streamlit → Settings → Secrets** as `GOOGLE_API_KEY = ai-...`"
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel('gemini-1.5-flash-exp')
+        resp = model.generate_content(prompt)
+        return resp.text
     except Exception as e:
-        return f"AI error: {e}"
+        return f"🤖 AI hiccup: {str(e)}. Try refreshing— or chat with a human advisor! 📞"
 
 # ----------------------------------------------------------------------
 # ----------------------- DIVIDEND SNOWBALL ----------------------------
