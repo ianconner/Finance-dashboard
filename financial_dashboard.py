@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 import requests
 import random
 import time
+import yfinance as yf
 
 # AI/ML
 from statsmodels.tsa.arima.model import ARIMA
@@ -155,7 +156,7 @@ def delete_goal(name):
 # ----------------------------------------------------------------------
 @st.cache_data(ttl=3600)
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
-def fetch_6mo_return(ticker):
+def fetch_6mo_return_finnhub(ticker):
     api_key = st.secrets.get("FINNHUB_API_KEY", "")
     if not api_key:
         st.warning("FINNHUB_API_KEY missing in secrets. Get free key at https://finnhub.io/register")
@@ -179,10 +180,29 @@ def fetch_6mo_return(ticker):
         return None
 
 # ----------------------------------------------------------------------
+# ----------------------- YFINANCE FALLBACK ----------------------------
+# ----------------------------------------------------------------------
+@st.cache_data(ttl=3600)
+@retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
+def fetch_6mo_return_yf(ticker):
+    try:
+        data = yf.download(ticker, period="6mo", progress=False)
+        if len(data) > 1 and not data.empty and 'Close' in data.columns:
+            return (data['Close'].iloc[-1] / data['Close'].iloc[0] - 1) * 100
+    except Exception as e:
+        st.warning(f"yfinance fallback error for {ticker}: {e}")
+        return None
+
+# Combined fetch with fallback
+def fetch_6mo_return(ticker):
+    ret = fetch_6mo_return_finnhub(ticker)
+    if ret is not None:
+        return ret
+    return fetch_6mo_return_yf(ticker)
+
+# ----------------------------------------------------------------------
 # ----------------------- YFINANCE HELPERS (FALLBACK) -----------------
 # ----------------------------------------------------------------------
-import yfinance as yf
-
 @st.cache_data(ttl=3600)
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
 def fetch_price(ticker):
@@ -289,6 +309,19 @@ def get_ai_rebalance(df_port, df_net):
         return resp.text
     except Exception as e:
         return f"🤖 AI hiccup: {str(e)}. Try refreshing— or chat with a human advisor! 📞"
+
+def get_ai_followup(previous_advice, followup_question):
+    prompt = f"Previous rebalance advice: {previous_advice}\nUser question: {followup_question}\nProvide a helpful, fun, bold response with emojis."
+    try:
+        api_key = st.secrets.get("GOOGLE_API_KEY", "")
+        if not api_key:
+            return "**GOOGLE_API_KEY missing!**"
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel('gemini-2.5-flash')
+        resp = model.generate_content(prompt)
+        return resp.text
+    except Exception as e:
+        return f"🤖 Follow-up hiccup: {str(e)}."
 
 # ----------------------------------------------------------------------
 # ----------------------- DIVIDEND SNOWBALL ----------------------------
@@ -464,6 +497,14 @@ if st.session_state.page == "ai":
     st.subheader("AI Rebalance Advice")
     advice = get_ai_rebalance(df_port, df_net)
     st.markdown(advice)
+    
+    # Follow-up question
+    followup = st.text_input("Ask a follow-up question about this advice:")
+    if followup:
+        followup_response = get_ai_followup(advice, followup)
+        st.markdown("**Follow-up:**")
+        st.markdown(followup_response)
+    
     if st.button("Back to Dashboard"):
         st.session_state.page = "home"
         st.rerun()
