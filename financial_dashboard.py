@@ -5,6 +5,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime
 import yfinance as yf
+import requests
 import random
 
 # AI/ML
@@ -30,6 +31,12 @@ import google.generativeai as genai
 # ----------------------------------------------------------------------
 PEER_NET_WORTH_40YO = 189_000
 HISTORICAL_SP_MONTHLY = 0.07 / 12
+
+# Global session for yfinance with User-Agent to avoid blocks
+session = requests.Session()
+session.headers.update({
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+})
 
 # ----------------------------------------------------------------------
 # --------------------------- DATABASE SETUP ---------------------------
@@ -156,33 +163,33 @@ def delete_goal(name):
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
 def fetch_price(ticker):
     try:
-        data = yf.download(ticker, period="1d", progress=False)
+        data = yf.download(ticker, period="1d", progress=False, session=session)
         if not data.empty and 'Close' in data.columns:
             return data['Close'].iloc[-1]
-    except:
-        pass
+    except Exception as e:
+        st.warning(f"Fetch price error for {ticker}: {e}")
     return None
 
 @st.cache_data(ttl=3600)
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
 def fetch_6mo_return(ticker):
     try:
-        data = yf.download(ticker, period="6mo", progress=False)
-        if len(data) > 1:
+        data = yf.download(ticker, period="6mo", progress=False, session=session)
+        if len(data) > 1 and not data.empty and 'Close' in data.columns:
             return (data['Close'].iloc[-1] / data['Close'].iloc[0] - 1) * 100
-    except:
-        pass
+    except Exception as e:
+        st.warning(f"Fetch 6mo return error for {ticker}: {e}")
     return None
 
 @st.cache_data(ttl=3600)
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
 def fetch_ticker(ticker, period="1d"):
     try:
-        data = yf.download(ticker, period=period, progress=False, auto_adjust=True)
+        data = yf.download(ticker, period=period, progress=False, auto_adjust=True, session=session)
         if not data.empty and 'Close' in data.columns:
             return data[['Close']].rename(columns={'Close': 'price'})
-    except:
-        pass
+    except Exception as e:
+        st.warning(f"Fetch ticker error for {ticker}: {e}")
     return None
 
 # ----------------------------------------------------------------------
