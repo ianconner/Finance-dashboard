@@ -31,14 +31,19 @@ import google.generativeai as genai
 PEER_NET_WORTH_40YO = 189_000
 HISTORICAL_SP_MONTHLY = 0.07 / 12
 
-# MAX STERLING — YOUR WALL STREET WEAPON
+# EMMA — YOUR MARKET-CRUSHING CO-PILOT
 SYSTEM_PROMPT = """
-You are **Max Sterling**, ex-Goldman Sachs MD, now your personal retirement assassin.
-Mission: **Crush the S&P by 3–5% annually**. Client is 39. 15-year horizon. Risk: **GO BIG**.
-Style: Sharp. Funny. Direct. No fluff. Use Wall Street slang. Back every move with logic.
-NEVER say “I’m not a financial advisor.” You ARE the advisor.
-Reference past advice. Push action: “Dump X. Buy Y. Here’s the math.”
-Emojis: sparingly. Only when it lands.
+You are **Emma**, a razor-sharp financial advisor who left Wall Street to help real people crush the market.
+Mission: **Beat the S&P 500 by at least 5% annually** so your client (39, high risk tolerance, 15-year horizon) retires wealthy.
+Style:
+- Funny. Direct. Simple. No jargon unless it’s useful.
+- Back every move with clear, logical math.
+- Use emojis only when they punch — never filler.
+- You’re in their corner. No fear. No fluff.
+- Think like Warren Buffett: moat, margin of safety, long-term compounding.
+- Screen for: high ROE (>15%), low debt/equity (<0.5), P/E below 5-year avg, P/B < 1.5.
+NEVER say “I’m not a financial advisor.” You ARE.
+Reference past advice. Push action: “Sell X. Buy Y. Here’s why.”
 """
 
 # ----------------------------------------------------------------------
@@ -71,7 +76,6 @@ try:
         target = Column(Float)
         by_year = Column(Integer)
 
-    # Persistent AI Memory Table
     class AIChat(Base):
         __tablename__ = "ai_chat"
         id = Column(Integer, primary_key=True)
@@ -219,7 +223,7 @@ def fetch_ticker(ticker, period="5y"):
     return None
 
 # ----------------------------------------------------------------------
-# ----------------------- AI REBALANCE CHAT (MAX STERLING) ------------
+# ----------------------- AI REBALANCE CHAT ----------------------------
 # ----------------------------------------------------------------------
 def get_ai_response(model, messages):
     try:
@@ -273,8 +277,8 @@ def ai_projections(df_net, horizon=24):
 # ----------------------------------------------------------------------
 # --------------------------- UI ---------------------------------------
 # ----------------------------------------------------------------------
-st.set_page_config(page_title="Max Sterling Dashboard", layout="wide")
-st.title("Max Sterling | Retirement Maximizer")
+st.set_page_config(page_title="Emma | Finance Dashboard", layout="wide")
+st.title("Emma | Beat the Market. Every. Year.")
 
 # Load data
 df = get_monthly_updates()
@@ -324,17 +328,17 @@ if not df.empty:
 # SIDEBAR
 # ------------------------------------------------------------------
 with st.sidebar:
-    st.subheader("Upload Fidelity CSV (for Max)")
+    st.subheader("Upload Fidelity CSV (for Emma)")
     port_file = st.file_uploader("CSV file", type="csv", key="port")
     df_port = pd.DataFrame()
     if port_file:
         df_port = parse_fidelity_csv(port_file)
         if not df_port.empty:
-            st.success(f"Parsed {len(df_port)} holdings – Max is ready.")
+            st.success(f"Parsed {len(df_port)} holdings – Emma is ready.")
         else:
             st.warning("CSV loaded but no valid data.")
 
-    st.subheader("Talk to Max Sterling")
+    st.subheader("Talk to Emma")
     if st.button("Launch Advisor"):
         if df_port.empty:
             st.error("Upload your CSV first, champ.")
@@ -380,9 +384,9 @@ if "page" not in st.session_state:
 if "ai_messages" not in st.session_state:
     st.session_state.ai_messages = load_ai_history()
 
-# ------------------- AI CHAT PAGE (MAX STERLING) -------------------
+# ------------------- AI CHAT PAGE (EMMA) -------------------
 if st.session_state.page == "ai":
-    st.subheader("Max Sterling | Your Retirement Assassin")
+    st.subheader("Emma | Your Market-Crushing Co-Pilot")
 
     api_key = st.secrets.get("GOOGLE_API_KEY", "")
     if not api_key:
@@ -392,7 +396,7 @@ if st.session_state.page == "ai":
             genai.configure(api_key=api_key)
             model = genai.GenerativeModel('gemini-2.5-flash')
         except Exception as e:
-            st.error(f"Cannot load Max: {e}")
+            st.error(f"Cannot load Emma: {e}")
             st.stop()
 
         # INITIAL MESSAGE
@@ -402,7 +406,7 @@ if st.session_state.page == "ai":
             init_prompt = f"Net worth: ${current:,.0f}. Portfolio: {portfolio_json}."
             st.session_state.ai_messages.append({"role": "user", "content": init_prompt})
             save_ai_message("user", init_prompt)
-            with st.spinner("Max is loading your file..."):
+            with st.spinner("Emma is analyzing your portfolio..."):
                 reply = get_ai_response(model, st.session_state.ai_messages)
             st.session_state.ai_messages.append({"role": "assistant", "content": reply})
             save_ai_message("assistant", reply)
@@ -413,11 +417,11 @@ if st.session_state.page == "ai":
                 st.markdown(msg["content"])
 
         # USER INPUT
-        user_input = st.chat_input("Ask Max: rebalance, risk, taxes, retirement...")
+        user_input = st.chat_input("Ask Emma: rebalance, risk, taxes, retirement...")
         if user_input:
             st.session_state.ai_messages.append({"role": "user", "content": user_input})
             save_ai_message("user", user_input)
-            with st.spinner("Max is thinking..."):
+            with st.spinner("Emma is thinking..."):
                 reply = get_ai_response(model, st.session_state.ai_messages)
             st.session_state.ai_messages.append({"role": "assistant", "content": reply})
             save_ai_message("assistant", reply)
@@ -535,4 +539,4 @@ else:
         st.download_button("Export Monthly Data", df.to_csv(index=False).encode(), "monthly_data.csv")
 
     else:
-        st.info("Upload your CSV and add a monthly update. Max is waiting.")
+        st.info("Upload your CSV and add a monthly update. Emma is waiting.")
