@@ -255,7 +255,7 @@ def get_ai_rebalance(df_port, df_net):
         if not api_key:
             return "**GOOGLE_API_KEY missing!** Add it in **Streamlit → Settings → Secrets** as `GOOGLE_API_KEY = ai-...`"
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-1.5-flash-exp')
+        model = genai.GenerativeModel('gemini-2.5-flash')
         resp = model.generate_content(prompt)
         return resp.text
     except Exception as e:
