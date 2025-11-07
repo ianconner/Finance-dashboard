@@ -16,7 +16,7 @@ from tenacity import retry, stop_after_attempt, wait_fixed
 
 # SQLAlchemy
 from sqlalchemy import (
-    create_engine, Column, String, Float, Date,
+    create_engine, Column, String, Float, Date, Integer,
     PrimaryKeyConstraint, text
 )
 from sqlalchemy.orm import declarative_base, sessionmaker
@@ -174,17 +174,17 @@ def parse_fidelity_csv(uploaded_file) -> pd.DataFrame:
     return df[['ticker', 'allocation', 'market_value']]
 
 # ----------------------------------------------------------------------
-# ----------------------- YFINANCE HELPERS -----------------------------
+# ----------------------- YFINANCE HELPERS (FIXED) ---------------------
 # ----------------------------------------------------------------------
 @st.cache_data(ttl=3600)
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
 def fetch_ticker(ticker, period="5y"):
     try:
-        data = yf.download(ticker, period=period, progress=False, auto_adjust=True)
+        data = yf.download(ticker, period=period, progress=False, auto_adjust=True, threads=False)
         if not data.empty and 'Close' in data.columns:
             return data[['Close']].rename(columns={'Close': 'price'})
-    except:
-        pass
+    except Exception as e:
+        st.warning(f"yfinance failed for {ticker}: {e}")
     return None
 
 # ----------------------------------------------------------------------
@@ -270,15 +270,19 @@ if not df.empty:
     # YTD Gain/Loss per Person
     st.markdown("#### **YTD Performance**")
     col1, col2, col3 = st.columns(3)
+    current_year = datetime.now().year
     for person, col in zip(["Sean", "Kim", "Taylor"], [col1, col2, col3]):
         person_df = df[df["person"] == person].copy()
         if not person_df.empty:
-            person_df["date"] = pd.to_datetime(person_df["date"])
             person_df = person_df.sort_values("date")
-            ytd_start = person_df[person_df["date"].dt.year == datetime.now().year]["value"].iloc[0]
-            ytd_now = person_df["value"].iloc[-1]
-            ytd_pct = (ytd_now / ytd_start - 1) * 100
-            col.metric(f"**{person}'s YTD**", f"{ytd_pct:+.1f}%")
+            ytd_data = person_df[person_df["date"].dt.year == current_year]
+            if len(ytd_data) > 1:
+                start_val = ytd_data["value"].iloc[0]
+                current_val = ytd_data["value"].iloc[-1]
+                ytd_pct = (current_val / start_val - 1) * 100
+                col.metric(f"**{person}'s YTD**", f"{ytd_pct:+.1f}%")
+            else:
+                col.metric(f"**{person}'s YTD**", "—")
         else:
             col.metric(f"**{person}'s YTD**", "—")
 
