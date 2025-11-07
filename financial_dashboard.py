@@ -18,9 +18,10 @@ from tenacity import retry, stop_after_attempt, wait_fixed
 # SQLAlchemy
 from sqlalchemy import (
     create_engine, Column, String, Float, Date, Integer,
-    PrimaryKeyConstraint, insert
+    PrimaryKeyConstraint, text
 )
 from sqlalchemy.orm import declarative_base, sessionmaker
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 # Gemini
 import google.generativeai as genai
@@ -102,7 +103,7 @@ def load_accounts():
 
 def add_monthly_update(date, person, acc_type, value):
     sess = get_session()
-    stmt = insert(MonthlyUpdate.__table__).values(
+    stmt = pg_insert(MonthlyUpdate.__table__).values(
         date=date, person=person, account_type=acc_type, value=value
     ).on_conflict_do_update(
         index_elements=['date', 'person', 'account_type'],
