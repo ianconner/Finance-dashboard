@@ -6,6 +6,7 @@ import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import requests
 import random
+import time
 
 # AI/ML
 from statsmodels.tsa.arima.model import ARIMA
@@ -150,32 +151,31 @@ def delete_goal(name):
     sess.close()
 
 # ----------------------------------------------------------------------
-# ----------------------- ALPHA VANTAGE HELPERS -----------------------
+# ----------------------- FINNHUB HELPERS ------------------------------
 # ----------------------------------------------------------------------
 @st.cache_data(ttl=3600)
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
 def fetch_6mo_return(ticker):
-    api_key = st.secrets.get("ALPHA_VANTAGE_API_KEY", "")
+    api_key = st.secrets.get("FINNHUB_API_KEY", "")
     if not api_key:
-        st.warning("ALPHA_VANTAGE_API_KEY missing in secrets. Get free key at https://www.alphavantage.co/support/#api-key")
+        st.warning("FINNHUB_API_KEY missing in secrets. Get free key at https://finnhub.io/register")
         return None
-    url = f"https://www.alphavantage.co/query?function=TIME_SERIES_DAILY_ADJUSTED&symbol={ticker}&outputsize=full&apikey={api_key}"
+    # Calculate 6 months ago in Unix timestamp
+    to_ts = int(time.time())
+    from_ts = int((datetime.now() - timedelta(days=180)).timestamp())
+    url = f"https://finnhub.io/api/v1/stock/candle?symbol={ticker}&resolution=D&from={from_ts}&to={to_ts}&token={api_key}"
     try:
         response = requests.get(url)
         data = response.json()
-        if "Error Message" in data or "Note" in data:
+        if "s" in data and data["s"] != "ok":
             return None
-        if "Time Series (Daily)" not in data:
+        if "c" not in data or len(data["c"]) < 2:
             return None
-        ts = data["Time Series (Daily)"]
-        dates = sorted(ts.keys(), reverse=True)
-        if len(dates) < 126:  # Approx 6 months of trading days
-            return None
-        latest_price = float(ts[dates[0]]["5. adjusted close"])
-        past_price = float(ts[dates[125]]["5. adjusted close"])
+        latest_price = data["c"][-1]  # Close prices
+        past_price = data["c"][0]
         return (latest_price / past_price - 1) * 100
     except Exception as e:
-        st.warning(f"Alpha Vantage error for {ticker}: {e}")
+        st.warning(f"Finnhub error for {ticker}: {e}")
         return None
 
 # ----------------------------------------------------------------------
