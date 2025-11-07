@@ -170,14 +170,13 @@ def fetch_6mo_return_finnhub(ticker):
         data = response.json()
         if "s" in data and data["s"] != "ok":
             return None
-        if "c" not in data or len(data["c"]) < 2:
-            return None
-        latest_price = data["c"][-1]  # Close prices
-        past_price = data["c"][0]
-        return (latest_price / past_price - 1) * 100
+        if "c" in data and len(data["c"]) >= 2:
+            latest_price = data["c"][-1]  # Close prices
+            past_price = data["c"][0]
+            return (latest_price / past_price - 1) * 100
     except Exception as e:
         st.warning(f"Finnhub error for {ticker}: {e}")
-        return None
+    return None
 
 # ----------------------------------------------------------------------
 # ----------------------- YFINANCE FALLBACK ----------------------------
@@ -191,14 +190,14 @@ def fetch_6mo_return_yf(ticker):
             return (data['Close'].iloc[-1] / data['Close'].iloc[0] - 1) * 100
     except Exception as e:
         st.warning(f"yfinance fallback error for {ticker}: {e}")
-        return None
+    return None
 
-# Combined fetch with fallback
+# Combined fetch with yf first, then Finnhub
 def fetch_6mo_return(ticker):
-    ret = fetch_6mo_return_finnhub(ticker)
+    ret = fetch_6mo_return_yf(ticker)
     if ret is not None:
         return ret
-    return fetch_6mo_return_yf(ticker)
+    return fetch_6mo_return_finnhub(ticker)
 
 # ----------------------------------------------------------------------
 # ----------------------- YFINANCE HELPERS (FALLBACK) -----------------
@@ -294,34 +293,12 @@ def analyze_portfolio(df_port):
 # ----------------------------------------------------------------------
 # ----------------------- AI REBALANCE BOT -----------------------------
 # ----------------------------------------------------------------------
-def get_ai_rebalance(df_port, df_net):
-    if df_port.empty:
-        return "Upload your Fidelity CSV first."
-    current = df_net['value'].iloc[-1] if not df_net.empty else 0
-    prompt = f"Net worth: ${current:,.0f}. Portfolio: {df_port[['ticker', 'allocation']].round(1).to_dict('records')}. Suggest 1-2 rebalance moves. Fun, bold, emojis."
+def get_ai_response(model, prompt):
     try:
-        api_key = st.secrets.get("GOOGLE_API_KEY", "")
-        if not api_key:
-            return "**GOOGLE_API_KEY missing!** Add it in **Streamlit → Settings → Secrets** as `GOOGLE_API_KEY = ai-...`"
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-2.5-flash')
         resp = model.generate_content(prompt)
         return resp.text
     except Exception as e:
-        return f"🤖 AI hiccup: {str(e)}. Try refreshing— or chat with a human advisor! 📞"
-
-def get_ai_followup(previous_advice, followup_question):
-    prompt = f"Previous rebalance advice: {previous_advice}\nUser question: {followup_question}\nProvide a helpful, fun, bold response with emojis."
-    try:
-        api_key = st.secrets.get("GOOGLE_API_KEY", "")
-        if not api_key:
-            return "**GOOGLE_API_KEY missing!**"
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-2.5-flash')
-        resp = model.generate_content(prompt)
-        return resp.text
-    except Exception as e:
-        return f"🤖 Follow-up hiccup: {str(e)}."
+        return f"🤖 AI hiccup: {str(e)}."
 
 # ----------------------------------------------------------------------
 # ----------------------- DIVIDEND SNOWBALL ----------------------------
@@ -493,20 +470,45 @@ with st.sidebar:
 if "page" not in st.session_state:
     st.session_state.page = "home"
 
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
 if st.session_state.page == "ai":
-    st.subheader("AI Rebalance Advice")
-    advice = get_ai_rebalance(df_port, df_net)
-    st.markdown(advice)
+    st.subheader("AI Rebalance Chat")
     
-    # Follow-up question
-    followup = st.text_input("Ask a follow-up question about this advice:")
-    if followup:
-        followup_response = get_ai_followup(advice, followup)
-        st.markdown("**Follow-up:**")
-        st.markdown(followup_response)
+    # Load Gemini model once
+    api_key = st.secrets.get("GOOGLE_API_KEY", "")
+    if not api_key:
+        st.warning("GOOGLE_API_KEY missing – chat disabled.")
+    else:
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel('gemini-1.5-flash')
+
+        # Initial prompt if no messages
+        if not st.session_state.messages:
+            current = df_net['value'].iloc[-1] if not df_net.empty else 0
+            initial_prompt = f"Net worth: ${current:,.0f}. Portfolio: {df_port[['ticker', 'allocation']].round(1).to_dict('records')}. Suggest 1-2 rebalance moves to maximize returns. Fun, bold, emojis."
+            initial_advice = get_ai_response(model, initial_prompt)
+            st.session_state.messages.append({"role": "assistant", "content": initial_advice})
+
+        # Display chat history
+        for msg in st.session_state.messages:
+            with st.chat_message(msg["role"]):
+                st.markdown(msg["content"])
+
+        # User input for follow-up
+        user_input = st.chat_input("Ask about rebalance or adjust parameters (e.g., 'Make it higher risk'):")
+        if user_input:
+            st.session_state.messages.append({"role": "user", "content": user_input})
+            history = "\n".join([f"{m['role']}: {m['content']}" for m in st.session_state.messages])
+            followup_prompt = f"Conversation history: {history}\nRespond helpfully, keep fun/bold/emojis style."
+            response = get_ai_response(model, followup_prompt)
+            st.session_state.messages.append({"role": "assistant", "content": response})
+            st.rerun()
     
     if st.button("Back to Dashboard"):
         st.session_state.page = "home"
+        st.session_state.messages = []  # Clear chat on exit
         st.rerun()
 
 elif st.session_state.page == "snowball":
