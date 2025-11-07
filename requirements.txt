@@ -8,4 +8,4 @@ psycopg2-binary==2.9.11
 numpy==2.1.2
 scikit-learn==1.5.2
 yfinance==0.2.46
-openai==1.30.0
+openai==1.55.3
