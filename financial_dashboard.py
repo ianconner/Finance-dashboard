@@ -223,11 +223,25 @@ def fetch_ticker(ticker, period="5y"):
     return None
 
 # ----------------------------------------------------------------------
-# ----------------------- AI REBALANCE CHAT ----------------------------
+# ----------------------- AI REBALANCE CHAT (FIXED) --------------------
 # ----------------------------------------------------------------------
 def get_ai_response(model, messages):
     try:
-        full_messages = [{"role": "system", "content": SYSTEM_PROMPT}] + messages
+        # Convert to Gemini format
+        gemini_messages = []
+        for msg in messages:
+            role = "user" if msg["role"] == "user" else "model"
+            gemini_messages.append({
+                "role": role,
+                "parts": [{"text": msg["content"]}]
+            })
+
+        # System prompt as first message
+        full_messages = [{
+            "role": "user",
+            "parts": [{"text": SYSTEM_PROMPT}]
+        }] + gemini_messages
+
         resp = model.generate_content(full_messages)
         return resp.text
     except Exception as e:
