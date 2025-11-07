@@ -482,7 +482,7 @@ if st.session_state.page == "ai":
         st.warning("GOOGLE_API_KEY missing – chat disabled.")
     else:
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        model = genai.GenerativeModel('gemini-1.5-flash-latest')
 
         # Initial prompt if no messages
         if not st.session_state.messages:
