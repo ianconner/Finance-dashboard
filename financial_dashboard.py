@@ -31,6 +31,16 @@ import google.generativeai as genai
 PEER_NET_WORTH_40YO = 189_000
 HISTORICAL_SP_MONTHLY = 0.07 / 12
 
+# MAX STERLING — YOUR WALL STREET WEAPON
+SYSTEM_PROMPT = """
+You are **Max Sterling**, ex-Goldman Sachs MD, now your personal retirement assassin.
+Mission: **Crush the S&P by 3–5% annually**. Client is 39. 15-year horizon. Risk: **GO BIG**.
+Style: Sharp. Funny. Direct. No fluff. Use Wall Street slang. Back every move with logic.
+NEVER say “I’m not a financial advisor.” You ARE the advisor.
+Reference past advice. Push action: “Dump X. Buy Y. Here’s the math.”
+Emojis: sparingly. Only when it lands.
+"""
+
 # ----------------------------------------------------------------------
 # --------------------------- DATABASE SETUP ---------------------------
 # ----------------------------------------------------------------------
@@ -60,6 +70,14 @@ try:
         name = Column(String, primary_key=True)
         target = Column(Float)
         by_year = Column(Integer)
+
+    # Persistent AI Memory Table
+    class AIChat(Base):
+        __tablename__ = "ai_chat"
+        id = Column(Integer, primary_key=True)
+        role = Column(String)  # 'user' or 'assistant'
+        content = Column(String)
+        timestamp = Column(Date, default=datetime.utcnow)
 
     Base.metadata.create_all(engine)
     Session = sessionmaker(bind=engine)
@@ -134,6 +152,19 @@ def add_goal(name, target, by_year):
     sess.commit()
     sess.close()
 
+# AI CHAT MEMORY (PERSISTENT)
+def save_ai_message(role, content):
+    sess = get_session()
+    sess.add(AIChat(role=role, content=content))
+    sess.commit()
+    sess.close()
+
+def load_ai_history():
+    sess = get_session()
+    rows = sess.query(AIChat).order_by(AIChat.id).all()
+    sess.close()
+    return [{"role": r.role, "content": r.content} for r in rows]
+
 # ----------------------------------------------------------------------
 # ----------------------- CSV → PORTFOLIO SUMMARY ----------------------
 # ----------------------------------------------------------------------
@@ -174,7 +205,7 @@ def parse_fidelity_csv(uploaded_file) -> pd.DataFrame:
     return df[['ticker', 'allocation', 'market_value']]
 
 # ----------------------------------------------------------------------
-# ----------------------- YFINANCE HELPERS (FIXED) ---------------------
+# ----------------------- YFINANCE HELPERS -----------------------------
 # ----------------------------------------------------------------------
 @st.cache_data(ttl=3600)
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
@@ -188,11 +219,12 @@ def fetch_ticker(ticker, period="5y"):
     return None
 
 # ----------------------------------------------------------------------
-# ----------------------- AI REBALANCE CHAT ----------------------------
+# ----------------------- AI REBALANCE CHAT (MAX STERLING) ------------
 # ----------------------------------------------------------------------
-def get_ai_response(model, prompt):
+def get_ai_response(model, messages):
     try:
-        resp = model.generate_content(prompt)
+        full_messages = [{"role": "system", "content": SYSTEM_PROMPT}] + messages
+        resp = model.generate_content(full_messages)
         return resp.text
     except Exception as e:
         return f"AI error: {str(e)}"
@@ -241,8 +273,8 @@ def ai_projections(df_net, horizon=24):
 # ----------------------------------------------------------------------
 # --------------------------- UI ---------------------------------------
 # ----------------------------------------------------------------------
-st.set_page_config(page_title="Finance Dashboard", layout="wide")
-st.title("Personal Finance Tracker")
+st.set_page_config(page_title="Max Sterling Dashboard", layout="wide")
+st.title("Max Sterling | Retirement Maximizer")
 
 # Load data
 df = get_monthly_updates()
@@ -292,20 +324,20 @@ if not df.empty:
 # SIDEBAR
 # ------------------------------------------------------------------
 with st.sidebar:
-    st.subheader("Upload Fidelity CSV (for AI)")
+    st.subheader("Upload Fidelity CSV (for Max)")
     port_file = st.file_uploader("CSV file", type="csv", key="port")
     df_port = pd.DataFrame()
     if port_file:
         df_port = parse_fidelity_csv(port_file)
         if not df_port.empty:
-            st.success(f"Parsed {len(df_port)} holdings – ready for AI!")
+            st.success(f"Parsed {len(df_port)} holdings – Max is ready.")
         else:
             st.warning("CSV loaded but no valid data.")
 
-    st.subheader("AI Rebalance Advisor")
-    if st.button("Ask AI Advisor"):
+    st.subheader("Talk to Max Sterling")
+    if st.button("Launch Advisor"):
         if df_port.empty:
-            st.error("Upload a CSV first!")
+            st.error("Upload your CSV first, champ.")
         else:
             st.session_state.page = "ai"
             st.rerun()
@@ -343,12 +375,14 @@ with st.sidebar:
 # ------------------------------------------------------------------
 if "page" not in st.session_state:
     st.session_state.page = "home"
-if "messages" not in st.session_state:
-    st.session_state.messages = []
 
-# ------------------- AI CHAT PAGE -------------------
+# Load persistent AI history
+if "ai_messages" not in st.session_state:
+    st.session_state.ai_messages = load_ai_history()
+
+# ------------------- AI CHAT PAGE (MAX STERLING) -------------------
 if st.session_state.page == "ai":
-    st.subheader("AI Rebalance Chat")
+    st.subheader("Max Sterling | Your Retirement Assassin")
 
     api_key = st.secrets.get("GOOGLE_API_KEY", "")
     if not api_key:
@@ -358,39 +392,39 @@ if st.session_state.page == "ai":
             genai.configure(api_key=api_key)
             model = genai.GenerativeModel('gemini-2.5-flash')
         except Exception as e:
-            st.error(f"Cannot load Gemini: {e}")
+            st.error(f"Cannot load Max: {e}")
             st.stop()
 
-        if not st.session_state.messages:
+        # INITIAL MESSAGE
+        if not st.session_state.ai_messages:
             current = df_net['value'].iloc[-1] if not df_net.empty else 0
             portfolio_json = df_port[['ticker', 'allocation']].round(1).to_dict('records')
-            init_prompt = (
-                f"Net worth: ${current:,.0f}. "
-                f"Portfolio: {portfolio_json}. "
-                "Suggest 1-2 rebalance moves to maximize returns. "
-                "Keep it fun, bold, and use emojis."
-            )
-            with st.spinner("AI is thinking..."):
-                init_reply = get_ai_response(model, init_prompt)
-            st.session_state.messages.append({"role": "assistant", "content": init_reply})
+            init_prompt = f"Net worth: ${current:,.0f}. Portfolio: {portfolio_json}."
+            st.session_state.ai_messages.append({"role": "user", "content": init_prompt})
+            save_ai_message("user", init_prompt)
+            with st.spinner("Max is loading your file..."):
+                reply = get_ai_response(model, st.session_state.ai_messages)
+            st.session_state.ai_messages.append({"role": "assistant", "content": reply})
+            save_ai_message("assistant", reply)
 
-        for msg in st.session_state.messages:
+        # DISPLAY CHAT
+        for msg in st.session_state.ai_messages:
             with st.chat_message(msg["role"]):
                 st.markdown(msg["content"])
 
-        user_input = st.chat_input("Ask anything – change risk, why sell X, etc.")
+        # USER INPUT
+        user_input = st.chat_input("Ask Max: rebalance, risk, taxes, retirement...")
         if user_input:
-            st.session_state.messages.append({"role": "user", "content": user_input})
-            history = "\n".join([f"{m['role']}: {m['content']}" for m in st.session_state.messages])
-            follow_prompt = f"Conversation history:\n{history}\nRespond helpfully, keep fun/bold/emojis."
-            with st.spinner("AI is replying..."):
-                reply = get_ai_response(model, follow_prompt)
-            st.session_state.messages.append({"role": "assistant", "content": reply})
+            st.session_state.ai_messages.append({"role": "user", "content": user_input})
+            save_ai_message("user", user_input)
+            with st.spinner("Max is thinking..."):
+                reply = get_ai_response(model, st.session_state.ai_messages)
+            st.session_state.ai_messages.append({"role": "assistant", "content": reply})
+            save_ai_message("assistant", reply)
             st.rerun()
 
     if st.button("Back to Dashboard"):
         st.session_state.page = "home"
-        st.session_state.messages = []
         st.rerun()
 
 # ------------------- HOME PAGE -------------------
@@ -501,4 +535,4 @@ else:
         st.download_button("Export Monthly Data", df.to_csv(index=False).encode(), "monthly_data.csv")
 
     else:
-        st.info("Add your first monthly update or upload a CSV to use the AI.")
+        st.info("Upload your CSV and add a monthly update. Max is waiting.")
