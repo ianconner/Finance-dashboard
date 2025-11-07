@@ -5,7 +5,6 @@ import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import yfinance as yf
-import time
 
 # AI/ML
 from statsmodels.tsa.arima.model import ARIMA
@@ -17,7 +16,7 @@ from tenacity import retry, stop_after_attempt, wait_fixed
 
 # SQLAlchemy
 from sqlalchemy import (
-    create_engine, Column, String, Float, Date, Integer,
+    create_engine, Column, String, Float, Date,
     PrimaryKeyConstraint, text
 )
 from sqlalchemy.orm import declarative_base, sessionmaker
@@ -139,10 +138,8 @@ def add_goal(name, target, by_year):
 # ----------------------- CSV → PORTFOLIO SUMMARY ----------------------
 # ----------------------------------------------------------------------
 def parse_fidelity_csv(uploaded_file) -> pd.DataFrame:
-    """Return a clean DataFrame with ticker, allocation % and market_value."""
     required = ['Symbol', 'Quantity', 'Last Price', 'Current Value', 'Average Cost Basis']
     df = pd.read_csv(uploaded_file)
-
     missing = [c for c in required if c not in df.columns]
     if missing:
         st.error(f"CSV missing columns: {', '.join(missing)}")
@@ -201,23 +198,6 @@ def get_ai_response(model, prompt):
         return f"AI error: {str(e)}"
 
 # ----------------------------------------------------------------------
-# ----------------------- DIVIDEND SNOWBALL ----------------------------
-# ----------------------------------------------------------------------
-def dividend_snowball(df_port, years=10):
-    if df_port.empty or 'market_value' not in df_port.columns:
-        return None
-    total = df_port['market_value'].sum()
-    values = [total]
-    for _ in range(years):
-        values.append(values[-1] * 1.02)
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=list(range(2025, 2025+years+1)), y=values,
-                             mode='lines+markers', name="Snowball",
-                             line=dict(width=4, color='gold')))
-    fig.update_layout(title="Dividend Snowball", yaxis_title="$")
-    return fig
-
-# ----------------------------------------------------------------------
 # ----------------------- PEER BENCHMARK -------------------------------
 # ----------------------------------------------------------------------
 def peer_benchmark(current):
@@ -264,7 +244,7 @@ def ai_projections(df_net, horizon=24):
 st.set_page_config(page_title="Finance Dashboard", layout="wide")
 st.title("Personal Finance Tracker")
 
-# Load net-worth data
+# Load data
 df = get_monthly_updates()
 df_net = pd.DataFrame(columns=['date', 'value'])
 if not df.empty:
@@ -278,10 +258,36 @@ if not df.empty:
     df_net["date"] = df_net["date"].dt.tz_localize(None)
 
 # ------------------------------------------------------------------
-# SIDEBAR – CSV + AI + ALL PREVIOUS FEATURES
+# --------------------- TOP SUMMARY (Peer + YTD) -----------------------
+# ------------------------------------------------------------------
+if not df.empty:
+    cur_total = df_net["value"].iloc[-1]
+
+    # Peer Benchmark
+    pct, vs = peer_benchmark(cur_total)
+    st.markdown(f"### **vs. Avg 40yo: Top {100-int(pct)}%** | Delta: **{vs:+,}**")
+
+    # YTD Gain/Loss per Person
+    st.markdown("#### **YTD Performance**")
+    col1, col2, col3 = st.columns(3)
+    for person, col in zip(["Sean", "Kim", "Taylor"], [col1, col2, col3]):
+        person_df = df[df["person"] == person].copy()
+        if not person_df.empty:
+            person_df["date"] = pd.to_datetime(person_df["date"])
+            person_df = person_df.sort_values("date")
+            ytd_start = person_df[person_df["date"].dt.year == datetime.now().year]["value"].iloc[0]
+            ytd_now = person_df["value"].iloc[-1]
+            ytd_pct = (ytd_now / ytd_start - 1) * 100
+            col.metric(f"**{person}'s YTD**", f"{ytd_pct:+.1f}%")
+        else:
+            col.metric(f"**{person}'s YTD**", "—")
+
+    st.markdown("---")
+
+# ------------------------------------------------------------------
+# SIDEBAR
 # ------------------------------------------------------------------
 with st.sidebar:
-    # ---- CSV UPLOAD (for AI) ----
     st.subheader("Upload Fidelity CSV (for AI)")
     port_file = st.file_uploader("CSV file", type="csv", key="port")
     df_port = pd.DataFrame()
@@ -292,7 +298,6 @@ with st.sidebar:
         else:
             st.warning("CSV loaded but no valid data.")
 
-    # ---- AI REBALANCER ----
     st.subheader("AI Rebalance Advisor")
     if st.button("Ask AI Advisor"):
         if df_port.empty:
@@ -301,7 +306,6 @@ with st.sidebar:
             st.session_state.page = "ai"
             st.rerun()
 
-    # ---- ADD MONTHLY UPDATE ----
     st.subheader("Add Monthly Update")
     accounts = load_accounts()
     person = st.selectbox("Person", list(accounts.keys()))
@@ -316,7 +320,6 @@ with st.sidebar:
         st.success("Saved!")
         st.rerun()
 
-    # ---- GOALS ----
     st.subheader("Add Goal")
     g_name = st.text_input("Name")
     g_target = st.number_input("Target ($)", min_value=0.0)
@@ -327,7 +330,6 @@ with st.sidebar:
             st.success("Added!")
             st.rerun()
 
-    # ---- ADMIN ----
     if st.button("Reset DB (Admin)"):
         reset_database()
         st.rerun()
@@ -387,7 +389,7 @@ if st.session_state.page == "ai":
         st.session_state.messages = []
         st.rerun()
 
-# ------------------- HOME PAGE (ALL FEATURES) -------------------
+# ------------------- HOME PAGE -------------------
 else:
     if not df.empty:
         # Monthly Summary
@@ -471,21 +473,9 @@ else:
             fig.add_trace(go.Scatter(x=future, y=rf_f, name="RF"))
             st.plotly_chart(fig, use_container_width=True)
 
-        # Dividend Snowball
-        st.subheader("Dividend Snowball (10Y)")
-        if st.button("Project"):
-            fig = dividend_snowball(df_port if not df_port.empty else pd.DataFrame())
-            if fig:
-                st.plotly_chart(fig, use_container_width=True)
-
-        # Peer Benchmark
-        st.subheader("Peer Benchmark")
-        cur = df_net["value"].iloc[-1]
-        pct, vs = peer_benchmark(cur)
-        st.metric("vs. Avg 40yo", f"Top {100-int(pct)}%", delta=f"{vs:+,}")
-
         # Goals
         st.subheader("Goals")
+        cur = df_net["value"].iloc[-1]
         for g in get_goals():
             prog = min(cur / g.target, 1.0)
             st.progress(prog)
