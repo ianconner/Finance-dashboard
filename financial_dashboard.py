@@ -1,17 +1,4 @@
-# ------------------- AI CHAT PAGE (MARA) -------------------
-if st.session_state.page == "ai":
-    st.subheader("Mara | Multiply Assets Regularly And Aggressively")
-
-    api_key = st.secrets.get("GOOGLE_API_KEY", "")
-    if not api_key:
-        st.warning("GOOGLE_API_KEY missing – add it in Secrets.")
-    else:
-        try:
-            genai.configure(api_key=api_key)
-
-            # 1. Initialize the model with the system prompt
-            model = genai.GenerativeModel(
-                'import streamlit as st
+import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
@@ -101,7 +88,7 @@ try:
     class AIChat(Base):
         __tablename__ = "ai_chat"
         id = Column(Integer, primary_key=True)
-        role = Column(String) # Will store "user" or "model"
+        role = Column(String)
         content = Column(String)
         timestamp = Column(Date, default=datetime.utcnow)
 
@@ -178,10 +165,8 @@ def add_goal(name, target, by_year):
     sess.commit()
     sess.close()
 
-# AI CHAT MEMORY
 def save_ai_message(role, content):
     sess = get_session()
-    # --- FIX: Standardize on "model" role for persistence ---
     db_role = "model" if role == "assistant" else role
     sess.add(AIChat(role=db_role, content=content))
     sess.commit()
@@ -191,13 +176,12 @@ def load_ai_history():
     sess = get_session()
     rows = sess.query(AIChat).order_by(AIChat.id).all()
     sess.close()
-    # Returns history with "user" and "model" roles
     return [{"role": r.role, "content": r.content} for r in rows]
 
 # ----------------------------------------------------------------------
 # ----------------------- CSV → PORTFOLIO SUMMARY ----------------------
 # ----------------------------------------------------------------------
-def parse_portfolio_csv(file_obj) -> pd.DataFrame:
+def parse_portfolio_csv(file_obj):
     required = ['Symbol', 'Quantity', 'Last Price', 'Current Value', 'Average Cost Basis']
     try:
         if isinstance(file_obj, str):
@@ -316,7 +300,7 @@ if not df.empty:
     df_net["date"] = df_net["date"].dt.tz_localize(None)
 
 # ------------------------------------------------------------------
-# --------------------- TOP SUMMARY (Peer + YTD) -----------------------
+# --------------------- TOP SUMMARY (Peer + YTD) -------------------
 # ------------------------------------------------------------------
 if not df.empty:
     cur_total = df_net["value"].iloc[-1]
@@ -455,16 +439,14 @@ if "page" not in st.session_state:
     st.session_state.page = "home"
 
 if "ai_messages" not in st.session_state:
-    # This now loads history with "user" and "model" roles
     st.session_state.ai_messages = load_ai_history()
 
-# Session state for the chat object
 if "ai_chat_session" not in st.session_state:
     st.session_state.ai_chat_session = None
 
-# ------------------- AI CHAT PAGE (EMMA) -------------------
+# ------------------- AI CHAT PAGE (MARA) -------------------
 if st.session_state.page == "ai":
-    st.subheader("Emma | Your Market-Crushing Co-Pilot")
+    st.subheader("Mara | Multiply Assets Regularly And Aggressively")
 
     api_key = st.secrets.get("GOOGLE_API_KEY", "")
     if not api_key:
@@ -473,23 +455,19 @@ if st.session_state.page == "ai":
         try:
             genai.configure(api_key=api_key)
 
-            # 1. Initialize the model with the system prompt
             model = genai.GenerativeModel(
                 'gemini-2.5-flash',
                 system_instruction=SYSTEM_PROMPT
             )
 
-            # 2. Format the persistent history (now "user" or "model") for the API
             formatted_history = []
             for msg in st.session_state.ai_messages:
-                # Add a safety check for good measure
                 if isinstance(msg, dict) and "role" in msg and "content" in msg:
                     formatted_history.append({
-                        "role": msg["role"], # Already "user" or "model"
-                        "parts": [msg.get("content", "")]  # Just pass the text string directly
+                        "role": msg["role"],
+                        "parts": [msg.get("content", "")]
                     })
 
-            # 3. Initialize the chat session object *with* the history
             if st.session_state.ai_chat_session is None:
                 st.session_state.ai_chat_session = model.start_chat(history=formatted_history)
             
@@ -499,7 +477,6 @@ if st.session_state.page == "ai":
             st.error(f"Cannot load Mara: {e}")
             st.stop()
 
-        # This block now only runs if the DB/session history is *truly* empty
         if not st.session_state.ai_messages:
             current = df_net['value'].iloc[-1] if not df_net.empty else 0
             portfolio_json = df_port[['ticker', 'allocation']].round(1).to_dict('records')
@@ -512,22 +489,18 @@ if st.session_state.page == "ai":
                 except Exception as e:
                     reply = f"AI error: {str(e)}"
 
-            # --- FIX: Save with "model" role ---
             st.session_state.ai_messages.append({"role": "user", "content": init_prompt})
             save_ai_message("user", init_prompt)
             st.session_state.ai_messages.append({"role": "model", "content": reply})
-            save_ai_message("model", reply) # "model" role is saved
+            save_ai_message("model", reply)
             
             st.rerun()
 
-        # Display all messages from our persistent history
         for msg in st.session_state.ai_messages:
-            # --- FIX: Map "model" to "assistant" for UI display ---
             display_role = "assistant" if msg["role"] == "model" else msg["role"]
             with st.chat_message(display_role):
                 st.markdown(msg["content"])
 
-        # Handle new user input
         user_input = st.chat_input("Ask Mara: rebalance, risk, taxes, retirement...")
         if user_input:
             st.session_state.ai_messages.append({"role": "user", "content": user_input})
@@ -540,13 +513,11 @@ if st.session_state.page == "ai":
                 except Exception as e:
                     reply = f"AI error: {str(e)}"
 
-            # --- FIX: Save with "model" role ---
             st.session_state.ai_messages.append({"role": "model", "content": reply})
-            save_ai_message("model", reply) # "model" role is saved
+            save_ai_message("model", reply)
             
             st.rerun()
 
-    # Clear chat history button
     if st.button("Clear Chat History"):
         st.session_state.ai_messages = []
         st.session_state.ai_chat_session = None
