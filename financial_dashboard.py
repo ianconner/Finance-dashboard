@@ -1,19 +1,3 @@
-This is a deeply frustrating error, and I see why. The error message `AI error: "Unable to determine the intended type of the dict... keys: ['role', 'content']"` means the Google Gemini API is receiving a message history in a format it doesn't understand.
-
-My previous fixes attempted to convert your internal history (using `role: "assistant"`) to the API-native format (using `role: "model"`) on the fly. This is clearly failing.
-
-The most robust solution is to **standardize your entire application on the API-native roles: "user" and "model".**
-
-This means we will:
-
-1.  Change `save_ai_message` to always save `"model"` instead of `"assistant"` to your database.
-2.  Update the AI chat page logic to append `"model"` to `st.session_state` instead of `"assistant"`.
-3.  This makes the history conversion for `model.start_chat()` direct and simple, eliminating the bug.
-4.  For display purposes only (in `st.chat_message`), we will map `"model"` back to `"assistant"` so it looks correct in the UI.
-
-This change permanently fixes the data mismatch. Here is the full, corrected code.
-
-```python
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -656,4 +640,3 @@ else:
 
     else:
         st.info("Upload your portfolio CSV and add a monthly update. Emma is waiting.")
-```
