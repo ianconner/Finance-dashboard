@@ -27,12 +27,12 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 import google.generativeai as genai
 
 # ----------------------------------------------------------------------
-# PERSISTENT CSV MEMORY (Session + Secrets)
+# PERSISTENT CSV MEMORY (Load from Database)
 # ----------------------------------------------------------------------
 if "portfolio_csv" not in st.session_state:
-    st.session_state.portfolio_csv = st.secrets.get("portfolio_csv", None)
+    st.session_state.portfolio_csv = None
 if "monthly_data_csv" not in st.session_state:
-    st.session_state.monthly_data_csv = st.secrets.get("monthly_data_csv", None)
+    st.session_state.monthly_data_csv = None
 
 # ----------------------------------------------------------------------
 # --------------------------- CONSTANTS --------------------------------
@@ -91,6 +91,12 @@ try:
         role = Column(String)
         content = Column(String)
         timestamp = Column(Date, default=datetime.utcnow)
+
+    class PortfolioCSV(Base):
+        __tablename__ = "portfolio_csv"
+        id = Column(Integer, primary_key=True)
+        csv_data = Column(String)
+        uploaded_at = Column(Date, default=datetime.utcnow)
 
     Base.metadata.create_all(engine)
     Session = sessionmaker(bind=engine)
@@ -177,6 +183,21 @@ def load_ai_history():
     rows = sess.query(AIChat).order_by(AIChat.id).all()
     sess.close()
     return [{"role": r.role, "content": r.content} for r in rows]
+
+def save_portfolio_csv(csv_b64):
+    sess = get_session()
+    # Delete old portfolio data
+    sess.query(PortfolioCSV).delete()
+    # Save new portfolio
+    sess.add(PortfolioCSV(csv_data=csv_b64))
+    sess.commit()
+    sess.close()
+
+def load_portfolio_csv():
+    sess = get_session()
+    result = sess.query(PortfolioCSV).order_by(PortfolioCSV.id.desc()).first()
+    sess.close()
+    return result.csv_data if result else None
 
 # ----------------------------------------------------------------------
 # ----------------------- CSV → PORTFOLIO SUMMARY ----------------------
@@ -339,7 +360,7 @@ with st.sidebar:
             "CSV (Symbol, Quantity, Last Price, etc.)",
             type="csv",
             key="port",
-            help="Remembered across refreshes"
+            help="Saved to database across refreshes"
         )
         df_port = pd.DataFrame()
 
@@ -348,17 +369,24 @@ with st.sidebar:
             if not df_port.empty:
                 st.success(f"Parsed {len(df_port)} holdings – Mara is ready.")
                 csv_b64 = base64.b64encode(port_file.getvalue()).decode()
+                save_portfolio_csv(csv_b64)  # Save to database
                 st.session_state.portfolio_csv = csv_b64
             else:
                 st.warning("CSV loaded but no valid data.")
-        elif st.session_state.portfolio_csv:
-            try:
-                csv_bytes = base64.b64decode(st.session_state.portfolio_csv)
-                df_port = parse_portfolio_csv(csv_bytes.decode())
-                if not df_port.empty:
-                    st.success(f"Loaded {len(df_port)} holdings from memory.")
-            except:
-                st.error("Failed to load saved portfolio. Re-upload.")
+        else:
+            # Try to load from database if not in session
+            if st.session_state.portfolio_csv is None:
+                st.session_state.portfolio_csv = load_portfolio_csv()
+            
+            # If we have portfolio data (from database or session), parse it
+            if st.session_state.portfolio_csv:
+                try:
+                    csv_bytes = base64.b64decode(st.session_state.portfolio_csv)
+                    df_port = parse_portfolio_csv(csv_bytes.decode())
+                    if not df_port.empty:
+                        st.success(f"Loaded {len(df_port)} holdings from database.")
+                except Exception as e:
+                    st.error(f"Failed to load saved portfolio: {e}")
 
         st.subheader("Talk to Mara")
         if st.button("Launch Advisor", disabled=df_port.empty):
@@ -399,6 +427,11 @@ with st.sidebar:
         if st.button("Reset Database (Deletes All)"):
             if st.checkbox("I understand this deletes everything", key="confirm_reset"):
                 reset_database()
+                # Also clear portfolio CSV from database
+                sess = get_session()
+                sess.query(PortfolioCSV).delete()
+                sess.commit()
+                sess.close()
                 st.session_state.portfolio_csv = None
                 st.session_state.monthly_data_csv = None
                 st.success("Database reset!")
