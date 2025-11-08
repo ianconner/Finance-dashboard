@@ -1,4 +1,17 @@
-import streamlit as st
+# ------------------- AI CHAT PAGE (MARA) -------------------
+if st.session_state.page == "ai":
+    st.subheader("Mara | Multiply Assets Regularly And Aggressively")
+
+    api_key = st.secrets.get("GOOGLE_API_KEY", "")
+    if not api_key:
+        st.warning("GOOGLE_API_KEY missing – add it in Secrets.")
+    else:
+        try:
+            genai.configure(api_key=api_key)
+
+            # 1. Initialize the model with the system prompt
+            model = genai.GenerativeModel(
+                'import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
@@ -40,9 +53,9 @@ if "monthly_data_csv" not in st.session_state:
 PEER_NET_WORTH_40YO = 189_000
 HISTORICAL_SP_MONTHLY = 0.07 / 12
 
-# EMMA – YOUR MARKET-CRUSHING CO-PILOT
+# MARA – MULTIPLY ASSETS REGULARLY AND AGGRESSIVELY
 SYSTEM_PROMPT = """
-You are **Emma**, a razor-sharp financial advisor who left Wall Street to help real people crush the market.
+You are **Mara** (Multiply Assets Regularly And Aggressively), a razor-sharp financial advisor who left Wall Street to help real people crush the market.
 Mission: **Beat the S&P 500 by at least 5% annually** so your client (39, high risk tolerance, 15-year horizon) retires wealthy.
 Style:
 - Funny. Direct. Simple. No jargon unless it's useful.
@@ -286,8 +299,8 @@ def ai_projections(df_net, horizon=24):
 # ----------------------------------------------------------------------
 # --------------------------- UI ---------------------------------------
 # ----------------------------------------------------------------------
-st.set_page_config(page_title="Emma | Finance Dashboard", layout="wide")
-st.title("Emma | Beat the Market. Every. Year.")
+st.set_page_config(page_title="Family Financial Tracker", layout="wide")
+st.title("Mara | Multiply Assets Regularly And Aggressively")
 
 # Load data
 df = get_monthly_updates()
@@ -335,8 +348,8 @@ if not df.empty:
 # ------------------------------------------------------------------
 with st.sidebar:
 
-    # === EMMA AI ADVISOR (PERSISTENT) ===
-    with st.expander("Emma – AI Portfolio Advisor", expanded=True):
+    # === MARA AI ADVISOR (PERSISTENT) ===
+    with st.expander("Mara – AI Portfolio Advisor", expanded=True):
         st.subheader("Upload Portfolio CSV")
         port_file = st.file_uploader(
             "CSV (Symbol, Quantity, Last Price, etc.)",
@@ -349,7 +362,7 @@ with st.sidebar:
         if port_file:
             df_port = parse_portfolio_csv(port_file)
             if not df_port.empty:
-                st.success(f"Parsed {len(df_port)} holdings – Emma is ready.")
+                st.success(f"Parsed {len(df_port)} holdings – Mara is ready.")
                 csv_b64 = base64.b64encode(port_file.getvalue()).decode()
                 st.session_state.portfolio_csv = csv_b64
             else:
@@ -363,7 +376,7 @@ with st.sidebar:
             except:
                 st.error("Failed to load saved portfolio. Re-upload.")
 
-        st.subheader("Talk to Emma")
+        st.subheader("Talk to Mara")
         if st.button("Launch Advisor", disabled=df_port.empty):
             st.session_state.page = "ai"
             st.rerun()
@@ -483,7 +496,7 @@ if st.session_state.page == "ai":
             chat = st.session_state.ai_chat_session
 
         except Exception as e:
-            st.error(f"Cannot load Emma: {e}")
+            st.error(f"Cannot load Mara: {e}")
             st.stop()
 
         # This block now only runs if the DB/session history is *truly* empty
@@ -492,7 +505,7 @@ if st.session_state.page == "ai":
             portfolio_json = df_port[['ticker', 'allocation']].round(1).to_dict('records')
             init_prompt = f"Net worth: ${current:,.0f}. Portfolio: {portfolio_json}."
             
-            with st.spinner("Emma is analyzing your portfolio..."):
+            with st.spinner("Mara is analyzing your portfolio..."):
                 try:
                     response = chat.send_message(init_prompt)
                     reply = response.text
@@ -515,12 +528,12 @@ if st.session_state.page == "ai":
                 st.markdown(msg["content"])
 
         # Handle new user input
-        user_input = st.chat_input("Ask Emma: rebalance, risk, taxes, retirement...")
+        user_input = st.chat_input("Ask Mara: rebalance, risk, taxes, retirement...")
         if user_input:
             st.session_state.ai_messages.append({"role": "user", "content": user_input})
             save_ai_message("user", user_input)
             
-            with st.spinner("Emma is thinking..."):
+            with st.spinner("Mara is thinking..."):
                 try:
                     response = chat.send_message(user_input)
                     reply = response.text
@@ -650,4 +663,4 @@ else:
         st.download_button("Export Monthly Data", df.to_csv(index=False).encode(), "monthly_data.csv")
 
     else:
-        st.info("Upload your portfolio CSV and add a monthly update. Emma is waiting.")
+        st.info("Upload your portfolio CSV and add a monthly update. Mara is waiting.")
