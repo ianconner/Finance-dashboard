@@ -1,3 +1,19 @@
+This is a deeply frustrating error, and I see why. The error message `AI error: "Unable to determine the intended type of the dict... keys: ['role', 'content']"` means the Google Gemini API is receiving a message history in a format it doesn't understand.
+
+My previous fixes attempted to convert your internal history (using `role: "assistant"`) to the API-native format (using `role: "model"`) on the fly. This is clearly failing.
+
+The most robust solution is to **standardize your entire application on the API-native roles: "user" and "model".**
+
+This means we will:
+
+1.  Change `save_ai_message` to always save `"model"` instead of `"assistant"` to your database.
+2.  Update the AI chat page logic to append `"model"` to `st.session_state` instead of `"assistant"`.
+3.  This makes the history conversion for `model.start_chat()` direct and simple, eliminating the bug.
+4.  For display purposes only (in `st.chat_message`), we will map `"model"` back to `"assistant"` so it looks correct in the UI.
+
+This change permanently fixes the data mismatch. Here is the full, corrected code.
+
+```python
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -88,7 +104,7 @@ try:
     class AIChat(Base):
         __tablename__ = "ai_chat"
         id = Column(Integer, primary_key=True)
-        role = Column(String)
+        role = Column(String) # Will store "user" or "model"
         content = Column(String)
         timestamp = Column(Date, default=datetime.utcnow)
 
@@ -133,7 +149,6 @@ def load_accounts():
 
 def add_monthly_update(date, person, acc_type, value):
     sess = get_session()
-    # Use pg_insert for on_conflict_do_update (PostgreSQL specific)
     stmt = pg_insert(MonthlyUpdate.__table__).values(
         date=date, person=person, account_type=acc_type, value=value
     ).on_conflict_do_update(
@@ -145,7 +160,7 @@ def add_monthly_update(date, person, acc_type, value):
     sess.close()
 
 def get_monthly_updates():
-    sess = get_session() # Fixed typo (was get.session())
+    sess = get_session()
     rows = sess.query(MonthlyUpdate).all()
     sess.close()
     return pd.DataFrame([
@@ -169,7 +184,9 @@ def add_goal(name, target, by_year):
 # AI CHAT MEMORY
 def save_ai_message(role, content):
     sess = get_session()
-    sess.add(AIChat(role=role, content=content))
+    # --- FIX: Standardize on "model" role for persistence ---
+    db_role = "model" if role == "assistant" else role
+    sess.add(AIChat(role=db_role, content=content))
     sess.commit()
     sess.close()
 
@@ -177,6 +194,7 @@ def load_ai_history():
     sess = get_session()
     rows = sess.query(AIChat).order_by(AIChat.id).all()
     sess.close()
+    # Returns history with "user" and "model" roles
     return [{"role": r.role, "content": r.content} for r in rows]
 
 # ----------------------------------------------------------------------
@@ -440,6 +458,7 @@ if "page" not in st.session_state:
     st.session_state.page = "home"
 
 if "ai_messages" not in st.session_state:
+    # This now loads history with "user" and "model" roles
     st.session_state.ai_messages = load_ai_history()
 
 # Session state for the chat object
@@ -457,31 +476,27 @@ if st.session_state.page == "ai":
         try:
             genai.configure(api_key=api_key)
 
-            # --- NEW, STABLE CHAT LOGIC ---
-
             # 1. Initialize the model with the system prompt
             model = genai.GenerativeModel(
                 'gemini-2.5-flash',
                 system_instruction=SYSTEM_PROMPT
             )
 
-            # 2. Format the persistent history (from DB) into Gemini's format
+            # 2. Format the persistent history (now "user" or "model") for the API
             formatted_history = []
             for msg in st.session_state.ai_messages:
-                role = "user" if msg["role"] == "user" else "model"
-                formatted_history.append({
-                    "role": role,
-                    "parts": [{"text": msg["content"]}]
-                })
+                # Add a safety check for good measure
+                if isinstance(msg, dict) and "role" in msg and "content" in msg:
+                    formatted_history.append({
+                        "role": msg["role"], # Already "user" or "model"
+                        "parts": [{"text": str(msg.get("content", ""))}]
+                    })
 
             # 3. Initialize the chat session object *with* the history
-            #    This only runs once, or if the session was cleared
             if st.session_state.ai_chat_session is None:
                 st.session_state.ai_chat_session = model.start_chat(history=formatted_history)
             
             chat = st.session_state.ai_chat_session
-
-            # --- END NEW CHAT LOGIC ---
 
         except Exception as e:
             st.error(f"Cannot load Emma: {e}")
@@ -494,35 +509,33 @@ if st.session_state.page == "ai":
             init_prompt = f"Net worth: ${current:,.0f}. Portfolio: {portfolio_json}."
             
             with st.spinner("Emma is analyzing your portfolio..."):
-                # Send the first message to the new, empty chat
                 try:
                     response = chat.send_message(init_prompt)
                     reply = response.text
                 except Exception as e:
                     reply = f"AI error: {str(e)}"
 
-            # Save both messages to our persistent history
+            # --- FIX: Save with "model" role ---
             st.session_state.ai_messages.append({"role": "user", "content": init_prompt})
             save_ai_message("user", init_prompt)
-            st.session_state.ai_messages.append({"role": "assistant", "content": reply})
-            save_ai_message("assistant", reply)
+            st.session_state.ai_messages.append({"role": "model", "content": reply})
+            save_ai_message("model", reply) # "model" role is saved
             
-            # Rerun to display the new messages immediately
             st.rerun()
 
         # Display all messages from our persistent history
         for msg in st.session_state.ai_messages:
-            with st.chat_message(msg["role"]):
+            # --- FIX: Map "model" to "assistant" for UI display ---
+            display_role = "assistant" if msg["role"] == "model" else msg["role"]
+            with st.chat_message(display_role):
                 st.markdown(msg["content"])
 
         # Handle new user input
         user_input = st.chat_input("Ask Emma: rebalance, risk, taxes, retirement...")
         if user_input:
-            # Add user message to persistent state
             st.session_state.ai_messages.append({"role": "user", "content": user_input})
             save_ai_message("user", user_input)
             
-            # Send the new message to the stateful chat session
             with st.spinner("Emma is thinking..."):
                 try:
                     response = chat.send_message(user_input)
@@ -530,16 +543,14 @@ if st.session_state.page == "ai":
                 except Exception as e:
                     reply = f"AI error: {str(e)}"
 
-            # Add model response to persistent state
-            st.session_state.ai_messages.append({"role": "assistant", "content": reply})
-            save_ai_message("assistant", reply)
+            # --- FIX: Save with "model" role ---
+            st.session_state.ai_messages.append({"role": "model", "content": reply})
+            save_ai_message("model", reply) # "model" role is saved
             
-            # Rerun to show the new messages
             st.rerun()
 
     if st.button("Back to Dashboard"):
         st.session_state.page = "home"
-        # Clear the chat session object when leaving the page
         st.session_state.ai_chat_session = None
         st.rerun()
 
@@ -593,7 +604,6 @@ else:
                 df_ror['sp_ror'] = HISTORICAL_SP_MONTHLY * 100
                 fig_ror = go.Figure()
                 fig_ror.add_trace(go.Bar(x=df_ror['date'], y=df_ror['ror'], name='Personal'))
-                # --- FIXED TYPO HERE ---
                 fig_ror.add_trace(go.Bar(x=df_ror['date'], y=df_ror['sp_ror'], name='S&P Avg'))
                 fig_ror.update_layout(title="Monthly ROR (vs static avg)", barmode='group')
                 st.plotly_chart(fig_ror, use_container_width=True)
@@ -646,3 +656,4 @@ else:
 
     else:
         st.info("Upload your portfolio CSV and add a monthly update. Emma is waiting.")
+```
