@@ -206,7 +206,8 @@ def parse_portfolio_csv(file_obj):
     required = ['Symbol', 'Quantity', 'Last Price', 'Current Value', 'Average Cost Basis']
     try:
         if isinstance(file_obj, str):
-            df = pd.read_csv(pd.compat.StringIO(file_obj))
+            from io import StringIO
+            df = pd.read_csv(StringIO(file_obj))
         else:
             df = pd.read_csv(file_obj)
     except Exception as e:
