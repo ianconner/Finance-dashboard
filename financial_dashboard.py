@@ -133,6 +133,7 @@ def load_accounts():
 
 def add_monthly_update(date, person, acc_type, value):
     sess = get_session()
+    # Use pg_insert for on_conflict_do_update (PostgreSQL specific)
     stmt = pg_insert(MonthlyUpdate.__table__).values(
         date=date, person=person, account_type=acc_type, value=value
     ).on_conflict_do_update(
@@ -144,7 +145,7 @@ def add_monthly_update(date, person, acc_type, value):
     sess.close()
 
 def get_monthly_updates():
-    sess = get_session() # <--- FIXED TYPO HERE (was get.session())
+    sess = get_session() # Fixed typo (was get.session())
     rows = sess.query(MonthlyUpdate).all()
     sess.close()
     return pd.DataFrame([
@@ -592,7 +593,8 @@ else:
                 df_ror['sp_ror'] = HISTORICAL_SP_MONTHLY * 100
                 fig_ror = go.Figure()
                 fig_ror.add_trace(go.Bar(x=df_ror['date'], y=df_ror['ror'], name='Personal'))
-                fig_ror.add_trace(go.Bar(x=f_ror['date'], y=df_ror['sp_ror'], name='S&P Avg'))
+                # --- FIXED TYPO HERE ---
+                fig_ror.add_trace(go.Bar(x=df_ror['date'], y=df_ror['sp_ror'], name='S&P Avg'))
                 fig_ror.update_layout(title="Monthly ROR (vs static avg)", barmode='group')
                 st.plotly_chart(fig_ror, use_container_width=True)
 
