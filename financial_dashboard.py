@@ -244,20 +244,28 @@ def fetch_ticker(ticker, period="5y"):
 # ----------------------------------------------------------------------
 def get_ai_response(model, messages):
     try:
+        # Correctly format messages for the Gemini API
         gemini_messages = []
         for msg in messages:
-            role = "user" if msg["role"] == "user" else "model"
+            # The role must be "user" or "model"
+            role = "user" if msg["role"] == "user" else "model" 
+            
+            # Each message must have a 'parts' list containing a dictionary with 'text'
             gemini_messages.append({
                 "role": role,
                 "parts": [{"text": msg["content"]}]
             })
+        
+        # Define the system prompt using the configuration
+        config = {
+            "system_instruction": SYSTEM_PROMPT
+        }
 
-        full_messages = [{
-            "role": "user",
-            "parts": [{"text": SYSTEM_PROMPT}]
-        }] + gemini_messages
-
-        resp = model.generate_content(full_messages)
+        # Pass the chat history and the config to generate_content
+        resp = model.generate_content(
+            contents=gemini_messages,
+            config=config
+        )
         return resp.text
     except Exception as e:
         return f"AI error: {str(e)}"
@@ -372,7 +380,7 @@ with st.sidebar:
                 st.success(f"Parsed {len(df_port)} holdings – Emma is ready.")
                 csv_b64 = base64.b64encode(port_file.getvalue()).decode()
                 st.session_state.portfolio_csv = csv_b64 # Correctly saved to session state
-
+                # Removed attempt to write to st.secrets (Fix for TypeError)
             else:
                 st.warning("CSV loaded but no valid data.")
         elif st.session_state.portfolio_csv:
@@ -415,7 +423,7 @@ with st.sidebar:
                     st.success(f"Imported {len(df_import)} rows!")
                     csv_b64 = base64.b64encode(monthly_file.getvalue()).decode()
                     st.session_state.monthly_data_csv = csv_b64 # Correctly saved to session state
-
+                    # Removed attempt to write to st.secrets (Fix for TypeError)
                 else:
                     st.error(f"Missing columns. Need: {required}")
             except Exception as e:
@@ -483,13 +491,21 @@ if st.session_state.page == "ai":
             st.stop()
 
         if not st.session_state.ai_messages:
+            # This is the initial message (User's first turn)
             current = df_net['value'].iloc[-1] if not df_net.empty else 0
             portfolio_json = df_port[['ticker', 'allocation']].round(1).to_dict('records')
             init_prompt = f"Net worth: ${current:,.0f}. Portfolio: {portfolio_json}."
+            
+            # Save User's first message to history
             st.session_state.ai_messages.append({"role": "user", "content": init_prompt})
             save_ai_message("user", init_prompt)
+            
+            # Get Emma's response
             with st.spinner("Emma is analyzing your portfolio..."):
+                # Call the fixed function with the chat history
                 reply = get_ai_response(model, st.session_state.ai_messages)
+            
+            # Save Emma's response to history
             st.session_state.ai_messages.append({"role": "assistant", "content": reply})
             save_ai_message("assistant", reply)
 
@@ -502,6 +518,7 @@ if st.session_state.page == "ai":
             st.session_state.ai_messages.append({"role": "user", "content": user_input})
             save_ai_message("user", user_input)
             with st.spinner("Emma is thinking..."):
+                # Call the fixed function with the updated chat history
                 reply = get_ai_response(model, st.session_state.ai_messages)
             st.session_state.ai_messages.append({"role": "assistant", "content": reply})
             save_ai_message("assistant", reply)
