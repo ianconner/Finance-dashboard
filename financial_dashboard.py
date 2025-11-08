@@ -371,9 +371,8 @@ with st.sidebar:
             if not df_port.empty:
                 st.success(f"Parsed {len(df_port)} holdings – Emma is ready.")
                 csv_b64 = base64.b64encode(port_file.getvalue()).decode()
-                st.session_state.portfolio_csv = csv_b64
-                if hasattr(st, "secrets"):
-                    st.secrets["portfolio_csv"] = csv_b64
+                st.session_state.portfolio_csv = csv_b64 # Correctly saved to session state
+
             else:
                 st.warning("CSV loaded but no valid data.")
         elif st.session_state.portfolio_csv:
@@ -415,7 +414,8 @@ with st.sidebar:
                         )
                     st.success(f"Imported {len(df_import)} rows!")
                     csv_b64 = base64.b64encode(monthly_file.getvalue()).decode()
-                    st.session_state.monthly_data_csv = csv_b64
+                    st.session_state.monthly_data_csv = csv_b64 # Correctly saved to session state
+
                 else:
                     st.error(f"Missing columns. Need: {required}")
             except Exception as e:
@@ -424,6 +424,7 @@ with st.sidebar:
         if st.button("Reset Database (Deletes All)"):
             if st.checkbox("I understand this deletes everything", key="confirm_reset"):
                 reset_database()
+                # Clear session state data related to uploads upon reset
                 st.session_state.portfolio_csv = None
                 st.session_state.monthly_data_csv = None
                 st.success("Database reset!")
