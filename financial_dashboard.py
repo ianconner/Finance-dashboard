@@ -5,6 +5,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import yfinance as yf
+import base64
 
 # AI/ML
 from statsmodels.tsa.arima.model import ARIMA
@@ -24,6 +25,14 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 # Gemini
 import google.generativeai as genai
+
+# ----------------------------------------------------------------------
+# PERSISTENT CSV MEMORY (Session + Secrets)
+# ----------------------------------------------------------------------
+if "portfolio_csv" not in st.session_state:
+    st.session_state.portfolio_csv = st.secrets.get("portfolio_csv", None)
+if "monthly_data_csv" not in st.session_state:
+    st.session_state.monthly_data_csv = st.secrets.get("monthly_data_csv", None)
 
 # ----------------------------------------------------------------------
 # --------------------------- CONSTANTS --------------------------------
@@ -79,7 +88,7 @@ try:
     class AIChat(Base):
         __tablename__ = "ai_chat"
         id = Column(Integer, primary_key=True)
-        role = Column(String)  # 'user' or 'assistant'
+        role = Column(String)
         content = Column(String)
         timestamp = Column(Date, default=datetime.utcnow)
 
@@ -156,7 +165,7 @@ def add_goal(name, target, by_year):
     sess.commit()
     sess.close()
 
-# AI CHAT MEMORY (PERSISTENT)
+# AI CHAT MEMORY
 def save_ai_message(role, content):
     sess = get_session()
     sess.add(AIChat(role=role, content=content))
@@ -172,9 +181,17 @@ def load_ai_history():
 # ----------------------------------------------------------------------
 # ----------------------- CSV → PORTFOLIO SUMMARY ----------------------
 # ----------------------------------------------------------------------
-def parse_fidelity_csv(uploaded_file) -> pd.DataFrame:
+def parse_portfolio_csv(file_obj) -> pd.DataFrame:
     required = ['Symbol', 'Quantity', 'Last Price', 'Current Value', 'Average Cost Basis']
-    df = pd.read_csv(uploaded_file)
+    try:
+        if isinstance(file_obj, str):
+            df = pd.read_csv(pd.compat.StringIO(file_obj))
+        else:
+            df = pd.read_csv(file_obj)
+    except Exception as e:
+        st.error(f"Failed to read CSV: {e}")
+        return pd.DataFrame()
+
     missing = [c for c in required if c not in df.columns]
     if missing:
         st.error(f"CSV missing columns: {', '.join(missing)}")
@@ -184,14 +201,14 @@ def parse_fidelity_csv(uploaded_file) -> pd.DataFrame:
     df = df.dropna(subset=required, how='any')
     df = df[df['Symbol'].astype(str).str.strip() != '']
     df = df[~df['Symbol'].astype(str).str.strip().str.lower().isin(
-        ['symbol', 'account number', 'nan', 'account name'])]
+        ['symbol', 'account number', 'nan', 'account name', ''])]
 
     if df.empty:
         st.error("No valid rows in CSV.")
         return pd.DataFrame()
 
     for col in ['Quantity', 'Last Price', 'Current Value', 'Average Cost Basis']:
-        df[col] = df[col].astype(str).str.replace(r'[\$,]', '', regex=True)
+        df[col] = df[col].astype(str).str.replace(r'[\$,]', '', regex=True).str.strip()
 
     df['ticker'] = df['Symbol'].astype(str).str.upper().str.strip()
     df['shares'] = pd.to_numeric(df['Quantity'], errors='coerce')
@@ -227,7 +244,6 @@ def fetch_ticker(ticker, period="5y"):
 # ----------------------------------------------------------------------
 def get_ai_response(model, messages):
     try:
-        # Convert to Gemini format
         gemini_messages = []
         for msg in messages:
             role = "user" if msg["role"] == "user" else "model"
@@ -236,7 +252,6 @@ def get_ai_response(model, messages):
                 "parts": [{"text": msg["content"]}]
             })
 
-        # System prompt as first message
         full_messages = [{
             "role": "user",
             "parts": [{"text": SYSTEM_PROMPT}]
@@ -312,12 +327,9 @@ if not df.empty:
 # ------------------------------------------------------------------
 if not df.empty:
     cur_total = df_net["value"].iloc[-1]
-
-    # Peer Benchmark
     pct, vs = peer_benchmark(cur_total)
     st.markdown(f"### **vs. Avg 40yo: Top {100-int(pct)}%** | Delta: **{vs:+,}**")
 
-    # YTD Gain/Loss per Person
     st.markdown("#### **YTD Performance**")
     col1, col2, col3 = st.columns(3)
     current_year = datetime.now().year
@@ -339,27 +351,87 @@ if not df.empty:
     st.markdown("---")
 
 # ------------------------------------------------------------------
-# SIDEBAR
+# SIDEBAR — TWO PERSISTENT CSV SECTIONS
 # ------------------------------------------------------------------
 with st.sidebar:
-    st.subheader("Upload Fidelity CSV (for Emma)")
-    port_file = st.file_uploader("CSV file", type="csv", key="port")
-    df_port = pd.DataFrame()
-    if port_file:
-        df_port = parse_fidelity_csv(port_file)
-        if not df_port.empty:
-            st.success(f"Parsed {len(df_port)} holdings – Emma is ready.")
-        else:
-            st.warning("CSV loaded but no valid data.")
 
-    st.subheader("Talk to Emma")
-    if st.button("Launch Advisor"):
-        if df_port.empty:
-            st.error("Upload your CSV first, champ.")
-        else:
+    # === EMMA AI ADVISOR (PERSISTENT) ===
+    with st.expander("Emma – AI Portfolio Advisor", expanded=True):
+        st.subheader("Upload Portfolio CSV")
+        port_file = st.file_uploader(
+            "CSV (Symbol, Quantity, Last Price, etc.)",
+            type="csv",
+            key="port",
+            help="Remembered across refreshes"
+        )
+        df_port = pd.DataFrame()
+
+        if port_file:
+            df_port = parse_portfolio_csv(port_file)
+            if not df_port.empty:
+                st.success(f"Parsed {len(df_port)} holdings – Emma is ready.")
+                csv_b64 = base64.b64encode(port_file.getvalue()).decode()
+                st.session_state.portfolio_csv = csv_b64
+                if hasattr(st, "secrets"):
+                    st.secrets["portfolio_csv"] = csv_b64
+            else:
+                st.warning("CSV loaded but no valid data.")
+        elif st.session_state.portfolio_csv:
+            try:
+                csv_bytes = base64.b64decode(st.session_state.portfolio_csv)
+                df_port = parse_portfolio_csv(csv_bytes.decode())
+                if not df_port.empty:
+                    st.success(f"Loaded {len(df_port)} holdings from memory.")
+            except:
+                st.error("Failed to load saved portfolio. Re-upload.")
+
+        st.subheader("Talk to Emma")
+        if st.button("Launch Advisor", disabled=df_port.empty):
             st.session_state.page = "ai"
             st.rerun()
 
+    st.markdown("---")
+
+    # === DATABASE RESET + BULK IMPORT ===
+    with st.expander("Database Reset & Bulk Import", expanded=False):
+        st.subheader("Bulk Import Monthly Data")
+        monthly_file = st.file_uploader(
+            "CSV (date, person, account_type, value)",
+            type="csv",
+            key="monthly",
+            help="Use after reset"
+        )
+
+        if monthly_file:
+            try:
+                df_import = pd.read_csv(monthly_file)
+                required = ['date', 'person', 'account_type', 'value']
+                if all(col in df_import.columns for col in required):
+                    df_import['date'] = pd.to_datetime(df_import['date']).dt.date
+                    for _, row in df_import.iterrows():
+                        add_monthly_update(
+                            row['date'], row['person'],
+                            row['account_type'], float(row['value'])
+                        )
+                    st.success(f"Imported {len(df_import)} rows!")
+                    csv_b64 = base64.b64encode(monthly_file.getvalue()).decode()
+                    st.session_state.monthly_data_csv = csv_b64
+                else:
+                    st.error(f"Missing columns. Need: {required}")
+            except Exception as e:
+                st.error(f"Import failed: {e}")
+
+        if st.button("Reset Database (Deletes All)"):
+            if st.checkbox("I understand this deletes everything", key="confirm_reset"):
+                reset_database()
+                st.session_state.portfolio_csv = None
+                st.session_state.monthly_data_csv = None
+                st.success("Database reset!")
+                st.rerun()
+
+    st.markdown("---")
+
+    # === MANUAL MONTHLY UPDATE ===
     st.subheader("Add Monthly Update")
     accounts = load_accounts()
     person = st.selectbox("Person", list(accounts.keys()))
@@ -374,6 +446,7 @@ with st.sidebar:
         st.success("Saved!")
         st.rerun()
 
+    # === GOALS ===
     st.subheader("Add Goal")
     g_name = st.text_input("Name")
     g_target = st.number_input("Target ($)", min_value=0.0)
@@ -384,17 +457,12 @@ with st.sidebar:
             st.success("Added!")
             st.rerun()
 
-    if st.button("Reset DB (Admin)"):
-        reset_database()
-        st.rerun()
-
 # ------------------------------------------------------------------
 # PAGE ROUTING
 # ------------------------------------------------------------------
 if "page" not in st.session_state:
     st.session_state.page = "home"
 
-# Load persistent AI history
 if "ai_messages" not in st.session_state:
     st.session_state.ai_messages = load_ai_history()
 
@@ -413,7 +481,6 @@ if st.session_state.page == "ai":
             st.error(f"Cannot load Emma: {e}")
             st.stop()
 
-        # INITIAL MESSAGE
         if not st.session_state.ai_messages:
             current = df_net['value'].iloc[-1] if not df_net.empty else 0
             portfolio_json = df_port[['ticker', 'allocation']].round(1).to_dict('records')
@@ -425,12 +492,10 @@ if st.session_state.page == "ai":
             st.session_state.ai_messages.append({"role": "assistant", "content": reply})
             save_ai_message("assistant", reply)
 
-        # DISPLAY CHAT
         for msg in st.session_state.ai_messages:
             with st.chat_message(msg["role"]):
                 st.markdown(msg["content"])
 
-        # USER INPUT
         user_input = st.chat_input("Ask Emma: rebalance, risk, taxes, retirement...")
         if user_input:
             st.session_state.ai_messages.append({"role": "user", "content": user_input})
@@ -448,7 +513,6 @@ if st.session_state.page == "ai":
 # ------------------- HOME PAGE -------------------
 else:
     if not df.empty:
-        # Monthly Summary
         st.subheader("Monthly Summary (by Year)")
         df['year'] = df['date'].dt.year
         for yr in sorted(df['year'].unique(), reverse=True):
@@ -458,12 +522,10 @@ else:
                                       values="value", fill_value=0)
                 st.dataframe(piv.style.format("${:,.0f}"))
 
-        # Net Worth
         st.subheader("Family Net Worth")
         fig = px.line(df_net, x="date", y="value", title="Net Worth")
         st.plotly_chart(fig, use_container_width=True)
 
-        # ROR vs S&P 500
         st.subheader("ROR vs S&P 500")
         df_net['ror'] = df_net['value'].pct_change() * 100
         df_ror = df_net.dropna(subset=['ror']).copy()
@@ -502,7 +564,6 @@ else:
                 fig_ror.update_layout(title="Monthly ROR (vs static avg)", barmode='group')
                 st.plotly_chart(fig_ror, use_container_width=True)
 
-        # YTD & M2M
         tab1, tab2 = st.tabs(["YTD", "M2M"])
         with tab1:
             df_ytd = df_net.copy()
@@ -516,7 +577,6 @@ else:
             fig_m2m = px.bar(df_m2m, x="date", y="gain")
             st.plotly_chart(fig_m2m, use_container_width=True)
 
-        # AI Projections
         st.subheader("AI Growth Projections")
         horizon = st.slider("Months", 12, 60, 24)
         arima_f, ar_l, ar_u, lr_f, rf_f = ai_projections(df_net, horizon)
@@ -529,7 +589,6 @@ else:
             fig.add_trace(go.Scatter(x=future, y=rf_f, name="RF"))
             st.plotly_chart(fig, use_container_width=True)
 
-        # Goals
         st.subheader("Goals")
         cur = df_net["value"].iloc[-1]
         for g in get_goals():
@@ -537,7 +596,6 @@ else:
             st.progress(prog)
             st.write(f"**{g.name}**: ${cur:,.0f} / ${g.target:,.0f}")
 
-        # Delete / Export
         st.subheader("Delete Entry")
         choice = st.selectbox("Select", df.index,
                               format_func=lambda i: f"{df.loc[i,'date']} – ${df.loc[i,'value']:,.0f}")
@@ -553,4 +611,4 @@ else:
         st.download_button("Export Monthly Data", df.to_csv(index=False).encode(), "monthly_data.csv")
 
     else:
-        st.info("Upload your CSV and add a monthly update. Emma is waiting.")
+        st.info("Upload your portfolio CSV and add a monthly update. Emma is waiting.")
