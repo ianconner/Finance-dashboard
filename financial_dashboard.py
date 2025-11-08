@@ -144,7 +144,7 @@ def add_monthly_update(date, person, acc_type, value):
     sess.close()
 
 def get_monthly_updates():
-    sess = get.session()
+    sess = get_session() # <--- FIXED TYPO HERE (was get.session())
     rows = sess.query(MonthlyUpdate).all()
     sess.close()
     return pd.DataFrame([
@@ -238,11 +238,6 @@ def fetch_ticker(ticker, period="5y"):
     except Exception as e:
         st.warning(f"yfinance failed for {ticker}: {e}")
     return None
-
-# ----------------------------------------------------------------------
-# --- (DELETED) AI REBALANCE CHAT (get_ai_response) ---
-# --- This function is no longer needed as we now use model.start_chat() ---
-# ----------------------------------------------------------------------
 
 # ----------------------------------------------------------------------
 # ----------------------- PEER BENCHMARK -------------------------------
@@ -597,7 +592,7 @@ else:
                 df_ror['sp_ror'] = HISTORICAL_SP_MONTHLY * 100
                 fig_ror = go.Figure()
                 fig_ror.add_trace(go.Bar(x=df_ror['date'], y=df_ror['ror'], name='Personal'))
-                fig_ror.add_trace(go.Bar(x=df_ror['date'], y=df_ror['sp_ror'], name='S&P Avg'))
+                fig_ror.add_trace(go.Bar(x=f_ror['date'], y=df_ror['sp_ror'], name='S&P Avg'))
                 fig_ror.update_layout(title="Monthly ROR (vs static avg)", barmode='group')
                 st.plotly_chart(fig_ror, use_container_width=True)
 
