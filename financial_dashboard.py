@@ -40,19 +40,19 @@ if "monthly_data_csv" not in st.session_state:
 PEER_NET_WORTH_40YO = 189_000
 HISTORICAL_SP_MONTHLY = 0.07 / 12
 
-# EMMA — YOUR MARKET-CRUSHING CO-PILOT
+# EMMA – YOUR MARKET-CRUSHING CO-PILOT
 SYSTEM_PROMPT = """
 You are **Emma**, a razor-sharp financial advisor who left Wall Street to help real people crush the market.
 Mission: **Beat the S&P 500 by at least 5% annually** so your client (39, high risk tolerance, 15-year horizon) retires wealthy.
 Style:
-- Funny. Direct. Simple. No jargon unless it’s useful.
+- Funny. Direct. Simple. No jargon unless it's useful.
 - Back every move with clear, logical math.
-- Use emojis only when they punch — never filler.
-- You’re in their corner. No fear. No fluff.
+- Use emojis only when they punch – never filler.
+- You're in their corner. No fear. No fluff.
 - Think like Warren Buffett: moat, margin of safety, long-term compounding.
 - Screen for: high ROE (>15%), low debt/equity (<0.5), P/E below 5-year avg, P/B < 1.5.
-NEVER say “I’m not a financial advisor.” You ARE.
-Reference past advice. Push action: “Sell X. Buy Y. Here’s why.”
+NEVER say "I'm not a financial advisor." You ARE.
+Reference past advice. Push action: "Sell X. Buy Y. Here's why."
 """
 
 # ----------------------------------------------------------------------
@@ -331,7 +331,7 @@ if not df.empty:
     st.markdown("---")
 
 # ------------------------------------------------------------------
-# SIDEBAR — TWO PERSISTENT CSV SECTIONS
+# SIDEBAR – TWO PERSISTENT CSV SECTIONS
 # ------------------------------------------------------------------
 with st.sidebar:
 
@@ -473,7 +473,7 @@ if st.session_state.page == "ai":
                 if isinstance(msg, dict) and "role" in msg and "content" in msg:
                     formatted_history.append({
                         "role": msg["role"], # Already "user" or "model"
-                        "parts": [{"text": str(msg.get("content", ""))}]
+                        "parts": [msg.get("content", "")]  # Just pass the text string directly
                     })
 
             # 3. Initialize the chat session object *with* the history
@@ -532,6 +532,17 @@ if st.session_state.page == "ai":
             save_ai_message("model", reply) # "model" role is saved
             
             st.rerun()
+
+    # Clear chat history button
+    if st.button("Clear Chat History"):
+        st.session_state.ai_messages = []
+        st.session_state.ai_chat_session = None
+        sess = get_session()
+        sess.query(AIChat).delete()
+        sess.commit()
+        sess.close()
+        st.success("Chat history cleared!")
+        st.rerun()
 
     if st.button("Back to Dashboard"):
         st.session_state.page = "home"
