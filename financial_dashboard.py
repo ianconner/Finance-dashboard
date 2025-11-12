@@ -9,12 +9,12 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-# === POLYGON.IO ===
+# === POLYGON.IO CLIENT ===
 try:
     from polygon import RESTClient
     POLYGON_API_KEY = st.secrets.get("POLYGON_API_KEY")
     if not POLYGON_API_KEY:
-        st.error("Add POLYGON_API_KEY to Streamlit Secrets")
+        st.error("Add POLYGON_API_KEY to Streamlit Secrets[](https://polygon.io)")
         st.stop()
     polygon_client = RESTClient(api_key=POLYGON_API_KEY)
 except Exception as e:
@@ -346,7 +346,7 @@ def parse_portfolio_csv(file_obj):
 # ----------------------------------------------------------------------
 def peer_benchmark(current):
     vs = current - PEER_NET_WORTH_40YO
-    pct = min(100  , max(0, (current / PEER_NET_WORTH_40YO) * 50))
+    pct = min(100, max(0, (current / PEER_NET_WORTH_40YO) * 50))
     return pct, vs
 
 @st.cache_data(ttl=3600)
