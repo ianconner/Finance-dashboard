@@ -669,4 +669,71 @@ else:
                 ydf = df[df['year'] == yr]
                 piv = ydf.pivot_table(index="date", columns=["person", "account_type"],
                                       values="value", fill_value=0)
-                st.dataframe(piv.style.format("${:,.0f}")), use_container_width
+                st.dataframe(piv.style.format("${:,.0f}"), use_container_width=True)
+
+        st.subheader("📈 Family Net Worth Over Time")
+        fig = px.line(df_net, x="date", y="value", title="Net Worth Trend")
+        fig.update_layout(yaxis_title="Net Worth ($)", xaxis_title="Date")
+        st.plotly_chart(fig, use_container_width=True)
+
+        st.subheader("📊 Monthly Return vs S&P 500")
+        df_net['ror'] = df_net['value'].pct_change() * 100
+        df_ror = df_net.dropna(subset=['ror']).copy()
+        if len(df_ror) >= 2:
+            sp_data = fetch_sp500_history()
+            if not sp_data.empty:
+                sp_df = sp_data[['Close']].rename(columns={'Close': 'price'}).reset_index()
+                sp_df['Date'] = pd.to_datetime(sp_df['Date']).dt.tz_localize(None)
+                sp_df['sp_ror'] = sp_df['price'].pct_change() * 100
+                sp_df = sp_df.dropna()
+                df_ror = pd.merge_asof(df_ror[['date', 'ror']].sort_values('date'),
+                                       sp_df[['Date', 'sp_ror']].sort_values('Date'),
+                                       left_on='date', right_on='Date',
+                                       direction='nearest', tolerance=pd.Timedelta('30D'))
+                df_ror = df_ror.dropna(subset=['sp_ror'])
+                if not df_ror.empty:
+                    fig_ror = go.Figure()
+                    fig_ror.add_trace(go.Bar(x=df_ror['date'], y=df_ror['ror'], name='Your Portfolio'))
+                    fig_ror.add_trace(go.Bar(x=df_ror['date'], y=df_ror['sp_ror'], name='S&P 500'))
+                    fig_ror.update_layout(title="Monthly Rate of Return Comparison", barmode='group',
+                                         yaxis_title="Return (%)", xaxis_title="Date")
+                    st.plotly_chart(fig_ror, use_container_width=True)
+
+        st.subheader("🎯 Financial Goals Progress")
+        goals = get_goals()
+        if goals:
+            cur = df_net["value"].iloc[-1]
+            for g in goals:
+                prog = min(cur / g.target, 1.0) if g.target > 0 else 0
+                st.progress(prog)
+                st.write(f"**{g.name}**: ${cur:,.0f} / ${g.target:,.0f} (Target: {g.by_year})")
+        else:
+            st.info("No goals set yet. Add one in the sidebar!")
+
+        st.markdown("---")
+        st.download_button("📥 Export Monthly Data", df.to_csv(index=False).encode(), "monthly_data.csv", mime="text/csv")
+        
+        # Portfolio Overview
+        if not df_port.empty and not df_enhanced.empty:
+            st.subheader("💼 Current Portfolio Holdings")
+            display_cols = ['ticker', 'allocation', 'market_value', '1y_return', 'pe', 'volatility']
+            available_cols = [c for c in display_cols if c in df_enhanced.columns]
+            st.dataframe(
+                df_enhanced[available_cols].style.format({
+                    'allocation': '{:.1f}%',
+                    'market_value': '${:,.0f}',
+                    '1y_return': '{:+.1f}%',
+                    'pe': '{:.1f}',
+                    'volatility': '{:.1f}%'
+                }),
+                use_container_width=True
+            )
+    else:
+        st.info("👋 Welcome to S.A.G.E.! Upload your portfolio CSV and add monthly updates to get started.")
+        st.markdown("""
+        ### Getting Started:
+        1. **Upload Portfolio CSV** in the sidebar (must include: Symbol, Quantity, Last Price, Current Value, Average Cost Basis)
+        2. **Add Monthly Updates** to track your net worth over time
+        3. **Set Financial Goals** to monitor your progress
+        4. **Chat with S.A.G.E.** for AI-powered portfolio insights
+        """)
