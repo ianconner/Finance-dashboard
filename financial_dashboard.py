@@ -669,4 +669,4 @@ else:
                 ydf = df[df['year'] == yr]
                 piv = ydf.pivot_table(index="date", columns=["person", "account_type"],
                                       values="value", fill_value=0)
-                st.dataframe(piv.style.format("${:,.0f}"), use_container_width
+                st.dataframe(piv.style.format("${:,.0f}")), use_container_width
