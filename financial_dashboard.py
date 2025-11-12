@@ -4,12 +4,14 @@ import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime
-import yfinance as yf
 import base64
 import json
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+
+# Polygon
+from polygon import RESTClient
 
 # AI/ML
 from statsmodels.tsa.arima.model import ARIMA
@@ -39,7 +41,7 @@ if "monthly_data_csv" not in st.session_state:
 # --------------------------- CONSTANTS --------------------------------
 # ----------------------------------------------------------------------
 PEER_NET_WORTH_40YO = 189_000
-SP500_TICKER = "^GSPC"
+SP500_TICKER = "INDEX:GSPC"  # Polygon format for indices
 
 # S.A.G.E. – STRATEGIC ASSET GROWTH ENGINE (Warm Teammate)
 SYSTEM_PROMPT = """
@@ -56,7 +58,7 @@ Mission: Help your partner (39, high risk tolerance, 15-year horizon) beat the S
 - Always end with a question or invitation: “What do you think?” or “Shall we?”
 
 **Analysis Rules (Cite Clearly):**
-- ROE > 15%, Debt/Equity < 0.5, P/E < 5Y avg, P/B < 1.5, Div Yield > 2%
+- P/E < 5Y avg, P/B < 1.5, Div Yield > 2%
 - Flag: >25% in one stock, underperforming vs S&P, high volatility
 - Suggest: “How about we trim 10% of AAPL and add to VOO?”
 
@@ -64,10 +66,9 @@ Mission: Help your partner (39, high risk tolerance, 15-year horizon) beat the S
 Hey! Quick win: We’re up 18% YTD — that’s 6% ahead of S&P!
 Let’s keep the momentum:
 → Trim 12% of TSLA (P/E 92, vol 48%)
-→ Add to SCHD (yield 3.6%, ROE 28%)
+→ Add to SCHD (yield 3.6%)
 Impact: +0.9% expected return, lower risk
 We stay diversified and keep compounding. Sound good?
-
 
 You’re in this together. Their success is your success.
 """
@@ -215,59 +216,40 @@ def load_portfolio_csv():
     return result.csv_data if result else None
 
 # ----------------------------------------------------------------------
-# --------------------- YFINANCE HELPERS (ROBUST) ----------------------
+# --------------------- POLYGON HELPERS (ROBUST) -----------------------
 # ----------------------------------------------------------------------
-def get_yf_session():
-    session = requests.Session()
-    retry = Retry(total=5, backoff_factor=2, status_forcelist=[429, 500, 502, 503, 504])
-    adapter = HTTPAdapter(max_retries=retry)
-    session.mount("http://", adapter)
-    session.mount("https://", adapter)
-    session.headers.update({
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-    })
-    return session
-
-YF_SESSION = get_yf_session()
+polygon_client = RESTClient()  # API key configured in env
 
 @st.cache_data(ttl=1800, show_spinner=False)
 def get_ticker_batch(tickers):
-    """Fetch multiple tickers in one call with retry"""
-    try:
-        data = yf.Tickers(tickers, session=YF_SESSION)
-        result = {}
-        for t in tickers:
-            ticker = data.tickers.get(t)
-            if not ticker:
-                continue
-            info = ticker.info
-            hist = ticker.history(period="5y")
-            if hist.empty:
+    result = {}
+    for t in tickers:
+        try:
+            details = polygon_client.get_ticker_details(t)
+            aggs = polygon_client.get_aggs(t, 1, 'day', '2024-01-01', '2025-11-11')
+            if not aggs:
                 continue
 
-            returns = hist['Close'].pct_change().dropna()
+            closes = [a.close for a in aggs]
+            returns = pd.Series(closes).pct_change().dropna()
             ann_return = (1 + returns.mean()) ** 252 - 1 if len(returns) > 0 else 0
             ann_vol = returns.std() * np.sqrt(252) if len(returns) > 0 else 0
             sharpe = ann_return / ann_vol if ann_vol > 0 else 0
 
             result[t] = {
-                'price': info.get('regularMarketPrice') or info.get('previousClose'),
+                'price': details.market_price if hasattr(details, 'market_price') else aggs[-1].close if aggs else None,
                 '1y_return': (
-                    (hist['Close'].iloc[-1] / hist['Close'].iloc[-252] - 1) * 100
-                    if len(hist) > 252 else None
+                    (closes[-1] / closes[-252] - 1) * 100 if len(closes) > 252 else None
                 ),
-                'roe': info.get('returnOnEquity'),
-                'debt_to_equity': info.get('debtToEquity'),
-                'pe': info.get('trailingPE'),
-                'pb': info.get('priceToBook'),
-                'div_yield': info.get('dividendYield'),
+                'pe': details.trailing_pe if hasattr(details, 'trailing_pe') else None,
+                'pb': details.price_to_book if hasattr(details, 'price_to_book') else None,
+                'div_yield': details.dividend_yield if hasattr(details, 'dividend_yield') else None,
                 'sharpe': round(sharpe, 2),
                 'volatility': round(ann_vol * 100, 1)
             }
-        return result
-    except Exception as e:
-        st.warning(f"yfinance batch failed: {e}")
-        return {}
+        except:
+            pass
+    return result
 
 # ----------------------------------------------------------------------
 # ----------------------- PORTFOLIO ENHANCEMENT ------------------------
@@ -284,7 +266,7 @@ def enhance_portfolio(df_port):
         batch_data = get_ticker_batch(tickers)
 
     enhanced = df_port.copy()
-    for col in ['price_live', '1y_return', 'roe', 'debt_equity', 'pe', 'pb', 'div_yield', 'sharpe', 'volatility']:
+    for col in ['price_live', '1y_return', 'pe', 'pb', 'div_yield', 'sharpe', 'volatility']:
         enhanced[col] = np.nan
 
     for i, row in enhanced.iterrows():
@@ -375,7 +357,12 @@ def peer_benchmark(current):
 @st.cache_data(ttl=3600)
 def fetch_sp500_history():
     try:
-        return yf.download(SP500_TICKER, period="5y", progress=False, auto_adjust=True, session=YF_SESSION)
+        aggs = polygon_client.get_aggs(SP500_TICKER, 1, 'day', '2020-01-01', '2025-11-11')
+        dates = [datetime.fromtimestamp(a.timestamp / 1000) for a in aggs]
+        closes = [a.close for a in aggs]
+        df = pd.DataFrame({'Date': dates, 'Close': closes})
+        df.set_index('Date', inplace=True)
+        return df
     except:
         return pd.DataFrame()
 
@@ -599,16 +586,16 @@ Let’s review and grow together.
                 with st.chat_message("assistant" if msg["role"] == "model" else "user"):
                     st.markdown(msg["content"])
 
-            user_input = st.chat_input("Ask S.A.G.E. anything: rebalance, goals, taxes...")
-            if user_input:
-                st.session_state.ai_messages.append({"role": "user", "content": user_input})
-                save_ai_message("user", user_input)
-                with st.spinner("S.A.G.E. is thinking with you..."):
-                    response = chat.send_message(user_input)
-                    reply = response.text
-                st.session_state.ai_messages.append({"role": "model", "content": reply})
-                save_ai_message("model", reply)
-                st.rerun()
+                user_input = st.chat_input("Ask S.A.G.E. anything: rebalance, goals, taxes...")
+                if user_input:
+                    st.session_state.ai_messages.append({"role": "user", "content": user_input})
+                    save_ai_message("user", user_input)
+                    with st.spinner("S.A.G.E. is thinking with you..."):
+                        response = chat.send_message(user_input)
+                        reply = response.text
+                    st.session_state.ai_messages.append({"role": "model", "content": reply})
+                    save_ai_message("model", reply)
+                    st.rerun()
 
         except Exception as e:
             st.error(f"Oops! S.A.G.E. hit a snag: {e}")
