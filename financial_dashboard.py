@@ -7,14 +7,14 @@ from datetime import datetime
 import yfinance as yf
 import base64
 import json
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 # AI/ML
 from statsmodels.tsa.arima.model import ARIMA
 from sklearn.linear_model import LinearRegression
 from sklearn.ensemble import RandomForestRegressor
-
-# Retries
-from tenacity import retry, stop_after_attempt, wait_fixed
 
 # SQLAlchemy
 from sqlalchemy import (
@@ -215,36 +215,59 @@ def load_portfolio_csv():
     return result.csv_data if result else None
 
 # ----------------------------------------------------------------------
-# ----------------------- YFINANCE HELPERS -----------------------------
+# --------------------- YFINANCE HELPERS (ROBUST) ----------------------
 # ----------------------------------------------------------------------
-@st.cache_data(ttl=300)
-@retry(stop=stop_after_attempt(3), wait=wait_fixed(1))
-def get_ticker_info(ticker):
-    try:
-        t = yf.Ticker(ticker)
-        info = t.info
-        hist = t.history(period="5y")
-        if hist.empty:
-            return None
-        
-        returns = hist['Close'].pct_change().dropna()
-        ann_return = (1 + returns.mean()) ** 252 - 1
-        ann_vol = returns.std() * np.sqrt(252)
-        sharpe = ann_return / ann_vol if ann_vol > 0 else 0
+def get_yf_session():
+    session = requests.Session()
+    retry = Retry(total=5, backoff_factor=2, status_forcelist=[429, 500, 502, 503, 504])
+    adapter = HTTPAdapter(max_retries=retry)
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+    session.headers.update({
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    })
+    return session
 
-        return {
-            'price': info.get('regularMarketPrice') or info.get('previousClose'),
-            '1y_return': (hist['Close'].iloc[-1] / hist['Close'].iloc[-252] - 1) * 100 if len(hist) > 252 else None,
-            'roe': info.get('returnOnEquity'),
-            'debt_to_equity': info.get('debtToEquity'),
-            'pe': info.get('trailingPE'),
-            'pb': info.get('priceToBook'),
-            'div_yield': info.get('dividendYield'),
-            'sharpe': round(sharpe, 2),
-            'volatility': round(ann_vol * 100, 1)
-        }
-    except:
-        return None
+YF_SESSION = get_yf_session()
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def get_ticker_batch(tickers):
+    """Fetch multiple tickers in one call with retry"""
+    try:
+        data = yf.Tickers(tickers, session=YF_SESSION)
+        result = {}
+        for t in tickers:
+            ticker = data.tickers.get(t)
+            if not ticker:
+                continue
+            info = ticker.info
+            hist = ticker.history(period="5y")
+            if hist.empty:
+                continue
+
+            returns = hist['Close'].pct_change().dropna()
+            ann_return = (1 + returns.mean()) ** 252 - 1 if len(returns) > 0 else 0
+            ann_vol = returns.std() * np.sqrt(252) if len(returns) > 0 else 0
+            sharpe = ann_return / ann_vol if ann_vol > 0 else 0
+
+            result[t] = {
+                'price': info.get('regularMarketPrice') or info.get('previousClose'),
+                '1y_return': (
+                    (hist['Close'].iloc[-1] / hist['Close'].iloc[-252] - 1) * 100
+                    if len(hist) > 252 else None
+                ),
+                'roe': info.get('returnOnEquity'),
+                'debt_to_equity': info.get('debtToEquity'),
+                'pe': info.get('trailingPE'),
+                'pb': info.get('priceToBook'),
+                'div_yield': info.get('dividendYield'),
+                'sharpe': round(sharpe, 2),
+                'volatility': round(ann_vol * 100, 1)
+            }
+        return result
+    except Exception as e:
+        st.warning(f"yfinance batch failed: {e}")
+        return {}
 
 # ----------------------------------------------------------------------
 # ----------------------- PORTFOLIO ENHANCEMENT ------------------------
@@ -253,18 +276,22 @@ def enhance_portfolio(df_port):
     if df_port.empty:
         return df_port, {}
 
-    enhanced = df_port.copy()
-    sp500 = get_ticker_info(SP500_TICKER) or {}
+    tickers = df_port['ticker'].tolist()
+    if SP500_TICKER not in tickers:
+        tickers.append(SP500_TICKER)
 
+    with st.spinner("Fetching market data (cached 30 min)..."):
+        batch_data = get_ticker_batch(tickers)
+
+    enhanced = df_port.copy()
     for col in ['price_live', '1y_return', 'roe', 'debt_equity', 'pe', 'pb', 'div_yield', 'sharpe', 'volatility']:
         enhanced[col] = np.nan
 
     for i, row in enhanced.iterrows():
-        info = get_ticker_info(row['ticker'])
-        if info:
-            for k, v in info.items():
-                if k in enhanced.columns and v is not None:
-                    enhanced.at[i, k] = v
+        info = batch_data.get(row['ticker'], {})
+        for k, v in info.items():
+            if k in enhanced.columns and v is not None:
+                enhanced.at[i, k] = v
 
     total = enhanced['market_value'].sum()
     enhanced['weight'] = enhanced['market_value'] / total
@@ -274,13 +301,16 @@ def enhance_portfolio(df_port):
     port_vol = np.sqrt(np.sum((enhanced['weight'] * enhanced['volatility']/100)**2)) * 100
     port_sharpe = port_return_1y / port_vol if port_vol > 0 else 0
 
+    sp500 = batch_data.get(SP500_TICKER, {})
+
     return enhanced, {
         'total_value': total,
-        '1y_return': port_return_1y,
-        'volatility': port_vol,
-        'sharpe': port_sharpe,
+        '1y_return': round(port_return_1y, 1),
+        'volatility': round(port_vol, 1),
+        'sharpe': round(port_sharpe, 2),
         'sp500_1y': sp500.get('1y_return'),
-        'sp500_vol': sp500.get('volatility')
+        'sp500_vol': sp500.get('volatility'),
+        'sp500_sharpe': sp500.get('sharpe')
     }
 
 # ----------------------------------------------------------------------
@@ -332,6 +362,24 @@ def parse_portfolio_csv(file_obj):
     return df[['ticker', 'allocation', 'market_value', 'shares', 'cost_basis']]
 
 # ----------------------------------------------------------------------
+# ----------------------- PEER BENCHMARK -------------------------------
+# ----------------------------------------------------------------------
+def peer_benchmark(current):
+    vs = current - PEER_NET_WORTH_40YO
+    pct = min(100, max(0, (current / PEER_NET_WORTH_40YO) * 50))
+    return pct, vs
+
+# ----------------------------------------------------------------------
+# ----------------------- S&P 500 HISTORY (CACHED) ---------------------
+# ----------------------------------------------------------------------
+@st.cache_data(ttl=3600)
+def fetch_sp500_history():
+    try:
+        return yf.download(SP500_TICKER, period="5y", progress=False, auto_adjust=True, session=YF_SESSION)
+    except:
+        return pd.DataFrame()
+
+# ----------------------------------------------------------------------
 # --------------------------- UI ---------------------------------------
 # ----------------------------------------------------------------------
 st.set_page_config(page_title="S.A.G.E. | Your Wealth Teammate", layout="wide")
@@ -352,7 +400,35 @@ if not df.empty:
     df_net["date"] = df_net["date"].dt.tz_localize(None)
 
 # ------------------------------------------------------------------
-# SIDEBAR
+# --------------------- TOP SUMMARY (Peer + YTD) -------------------
+# ------------------------------------------------------------------
+if not df.empty:
+    cur_total = df_net["value"].iloc[-1]
+    pct, vs = peer_benchmark(cur_total)
+    st.markdown(f"### **vs. Avg 40yo: Top {100-int(pct)}%** | Delta: **{vs:+,}**")
+
+    st.markdown("#### **YTD Performance**")
+    col1, col2, col3 = st.columns(3)
+    current_year = datetime.now().year
+    for person, col in zip(["Sean", "Kim", "Taylor"], [col1, col2, col3]):
+        person_df = df[df["person"] == person].copy()
+        if not person_df.empty:
+            person_df = person_df.sort_values("date")
+            ytd_data = person_df[person_df["date"].dt.year == current_year]
+            if len(ytd_data) > 1:
+                start_val = ytd_data["value"].iloc[0]
+                current_val = ytd_data["value"].iloc[-1]
+                ytd_pct = (current_val / start_val - 1) * 100
+                col.metric(f"**{person}'s YTD**", f"{ytd_pct:+.1f}%")
+            else:
+                col.metric(f"**{person}'s YTD**", "—")
+        else:
+            col.metric(f"**{person}'s YTD**", "—")
+
+    st.markdown("---")
+
+# ------------------------------------------------------------------
+# SIDEBAR – PORTFOLIO + S.A.G.E. AI
 # ------------------------------------------------------------------
 with st.sidebar:
     with st.expander("S.A.G.E. – Your AI Teammate", expanded=True):
@@ -396,8 +472,82 @@ with st.sidebar:
             st.session_state.page = "ai"
             st.rerun()
 
+        # BONUS: Refresh Market Data
+        if st.button("Refresh Market Data Now"):
+            st.cache_data.clear()
+            st.success("Market data refreshed! Give me 10 sec...")
+            st.rerun()
+
     st.markdown("---")
-    # [Other sidebar items: reset, import, add update, goals — unchanged]
+
+    # === DATABASE RESET + BULK IMPORT ===
+    with st.expander("Database Reset & Bulk Import", expanded=False):
+        st.subheader("Bulk Import Monthly Data")
+        monthly_file = st.file_uploader(
+            "CSV (date, person, account_type, value)",
+            type="csv",
+            key="monthly",
+            help="Use after reset"
+        )
+
+        if monthly_file:
+            try:
+                df_import = pd.read_csv(monthly_file)
+                required = ['date', 'person', 'account_type', 'value']
+                if all(col in df_import.columns for col in required):
+                    df_import['date'] = pd.to_datetime(df_import['date']).dt.date
+                    for _, row in df_import.iterrows():
+                        add_monthly_update(
+                            row['date'], row['person'],
+                            row['account_type'], float(row['value'])
+                        )
+                    st.success(f"Imported {len(df_import)} rows!")
+                    csv_b64 = base64.b64encode(monthly_file.getvalue()).decode()
+                    st.session_state.monthly_data_csv = csv_b64
+                else:
+                    st.error(f"Missing columns. Need: {required}")
+            except Exception as e:
+                st.error(f"Import failed: {e}")
+
+        if st.button("Reset Database (Deletes All)"):
+            if st.checkbox("I understand this deletes everything", key="confirm_reset"):
+                reset_database()
+                sess = get_session()
+                sess.query(PortfolioCSV).delete()
+                sess.commit()
+                sess.close()
+                st.session_state.portfolio_csv = None
+                st.session_state.monthly_data_csv = None
+                st.success("Database reset!")
+                st.rerun()
+
+    st.markdown("---")
+
+    # === MANUAL MONTHLY UPDATE ===
+    st.subheader("Add Monthly Update")
+    accounts = load_accounts()
+    person = st.selectbox("Person", list(accounts.keys()))
+    acct = st.selectbox("Account", accounts.get(person, []))
+    col1, col2 = st.columns(2)
+    with col1:
+        date_in = st.date_input("Date", value=pd.Timestamp("today").date())
+    with col2:
+        val = st.number_input("Value ($)", min_value=0.0)
+    if st.button("Save"):
+        add_monthly_update(date_in, person, acct, float(val))
+        st.success("Saved!")
+        st.rerun()
+
+    # === GOALS ===
+    st.subheader("Add Goal")
+    g_name = st.text_input("Name")
+    g_target = st.number_input("Target ($)", min_value=0.0)
+    g_year = st.number_input("By Year", min_value=2000, step=1)
+    if st.button("Add Goal"):
+        if g_name:
+            add_goal(g_name, g_target, g_year)
+            st.success("Added!")
+            st.rerun()
 
 # ------------------------------------------------------------------
 # PAGE ROUTING
@@ -423,7 +573,6 @@ if st.session_state.page == "ai":
             chat = st.session_state.ai_chat_session or model.start_chat(history=[])
             st.session_state.ai_chat_session = chat
 
-            # Initial message
             if not st.session_state.ai_messages and not df_port.empty:
                 current = df_net['value'].iloc[-1] if not df_net.empty else 0
                 df_enhanced, metrics = enhance_portfolio(df_port)
@@ -480,5 +629,49 @@ Let’s review and grow together.
 # ------------------- HOME PAGE -------------------
 else:
     if not df.empty:
-        # [Keep your existing home page: net worth, ROR, goals, etc.]
-        st.info("Upload your portfolio and say hi to S.A.G.E. — we’re ready when you are!")
+        st.subheader("Monthly Summary (by Year)")
+        df['year'] = df['date'].dt.year
+        for yr in sorted(df['year'].unique(), reverse=True):
+            with st.expander(f"{yr} – Click to Expand"):
+                ydf = df[df['year'] == yr]
+                piv = ydf.pivot_table(index="date", columns=["person", "account_type"],
+                                      values="value", fill_value=0)
+                st.dataframe(piv.style.format("${:,.0f}"))
+
+        st.subheader("Family Net Worth")
+        fig = px.line(df_net, x="date", y="value", title="Net Worth")
+        st.plotly_chart(fig, use_container_width=True)
+
+        st.subheader("ROR vs S&P 500")
+        df_net['ror'] = df_net['value'].pct_change() * 100
+        df_ror = df_net.dropna(subset=['ror']).copy()
+        if len(df_ror) >= 2:
+            sp_data = fetch_sp500_history()
+            if not sp_data.empty:
+                sp_df = sp_data[['Close']].rename(columns={'Close': 'price'}).reset_index()
+                sp_df['Date'] = pd.to_datetime(sp_df['Date']).dt.tz_localize(None)
+                sp_df['sp_ror'] = sp_df['price'].pct_change() * 100
+                sp_df = sp_df.dropna()
+                df_ror = pd.merge_asof(df_ror[['date', 'ror']].sort_values('date'),
+                                       sp_df[['Date', 'sp_ror']].sort_values('Date'),
+                                       left_on='date', right_on='Date',
+                                       direction='nearest', tolerance=pd.Timedelta('1M'))
+                df_ror = df_ror.dropna(subset=['sp_ror'])
+                if not df_ror.empty:
+                    fig_ror = go.Figure()
+                    fig_ror.add_trace(go.Bar(x=df_ror['date'], y=df_ror['ror'], name='Personal'))
+                    fig_ror.add_trace(go.Bar(x=df_ror['date'], y=df_ror['sp_ror'], name='S&P 500'))
+                    fig_ror.update_layout(title="Monthly ROR", barmode='group')
+                    st.plotly_chart(fig_ror, use_container_width=True)
+
+        st.subheader("Goals")
+        cur = df_net["value"].iloc[-1]
+        for g in get_goals():
+            prog = min(cur / g.target, 1.0)
+            st.progress(prog)
+            st.write(f"**{g.name}**: ${cur:,.0f} / ${g.target:,.0f}")
+
+        st.download_button("Export Monthly Data", df.to_csv(index=False).encode(), "monthly_data.csv")
+
+    else:
+        st.info("Upload your portfolio CSV and add a monthly update. S.A.G.E. is ready.")
