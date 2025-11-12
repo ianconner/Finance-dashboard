@@ -5,13 +5,21 @@ import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime
 import base64
-import json
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-# Polygon
-from polygon import RESTClient
+# === POLYGON.IO ===
+try:
+    from polygon import RESTClient
+    POLYGON_API_KEY = st.secrets.get("POLYGON_API_KEY")
+    if not POLYGON_API_KEY:
+        st.error("Add POLYGON_API_KEY to Streamlit Secrets")
+        st.stop()
+    polygon_client = RESTClient(api_key=POLYGON_API_KEY)
+except Exception as e:
+    st.error(f"Polygon setup failed: {e}")
+    st.stop()
 
 # AI/ML
 from statsmodels.tsa.arima.model import ARIMA
@@ -41,9 +49,9 @@ if "monthly_data_csv" not in st.session_state:
 # --------------------------- CONSTANTS --------------------------------
 # ----------------------------------------------------------------------
 PEER_NET_WORTH_40YO = 189_000
-SP500_TICKER = "INDEX:GSPC"  # Polygon format for indices
+SP500_TICKER = "INDEX:GSPC"
 
-# S.A.G.E. – STRATEGIC ASSET GROWTH ENGINE (Warm Teammate)
+# S.A.G.E. – STRATEGIC ASSET GROWTH ENGINE
 SYSTEM_PROMPT = """
 You are **S.A.G.E.** — **Strategic Asset Growth Engine**, your client’s trusted financial co-pilot and teammate.
 
@@ -63,11 +71,11 @@ Mission: Help your partner (39, high risk tolerance, 15-year horizon) beat the S
 - Suggest: “How about we trim 10% of AAPL and add to VOO?”
 
 **Format:**
-Hey! Quick win: We’re up 18% YTD — that’s 6% ahead of S&P!
-Let’s keep the momentum:
-→ Trim 12% of TSLA (P/E 92, vol 48%)
-→ Add to SCHD (yield 3.6%)
-Impact: +0.9% expected return, lower risk
+Hey! Quick win: We’re up 18% YTD — that’s 6% ahead of S&P!  
+Let’s keep the momentum:  
+→ Trim 12% of TSLA (P/E 92, vol 48%)  
+→ Add to SCHD (yield 3.6%)  
+Impact: +0.9% expected return, lower risk  
 We stay diversified and keep compounding. Sound good?
 
 You’re in this together. Their success is your success.
@@ -216,17 +224,16 @@ def load_portfolio_csv():
     return result.csv_data if result else None
 
 # ----------------------------------------------------------------------
-# --------------------- POLYGON HELPERS (ROBUST) -----------------------
+# --------------------- POLYGON BATCH FETCH (CACHED) -------------------
 # ----------------------------------------------------------------------
-polygon_client = RESTClient()  # API key configured in env
-
 @st.cache_data(ttl=1800, show_spinner=False)
 def get_ticker_batch(tickers):
     result = {}
     for t in tickers:
         try:
-            details = polygon_client.get_ticker_details(t)
-            aggs = polygon_client.get_aggs(t, 1, 'day', '2024-01-01', '2025-11-11')
+            pt = t if t.startswith("INDEX:") else t.upper()
+            details = polygon_client.get_ticker_details(pt)
+            aggs = polygon_client.get_aggs(pt, 1, "day", "2020-01-01", "2025-11-12")
             if not aggs:
                 continue
 
@@ -237,18 +244,16 @@ def get_ticker_batch(tickers):
             sharpe = ann_return / ann_vol if ann_vol > 0 else 0
 
             result[t] = {
-                'price': details.market_price if hasattr(details, 'market_price') else aggs[-1].close if aggs else None,
-                '1y_return': (
-                    (closes[-1] / closes[-252] - 1) * 100 if len(closes) > 252 else None
-                ),
-                'pe': details.trailing_pe if hasattr(details, 'trailing_pe') else None,
-                'pb': details.price_to_book if hasattr(details, 'price_to_book') else None,
-                'div_yield': details.dividend_yield if hasattr(details, 'dividend_yield') else None,
+                'price': aggs[-1].close if aggs else None,
+                '1y_return': (closes[-1] / closes[-252] - 1) * 100 if len(closes) > 252 else None,
+                'pe': getattr(details, 'trailing_pe', None),
+                'pb': getattr(details, 'price_to_book_ratio', None),
+                'div_yield': getattr(details, 'dividend_yield', None),
                 'sharpe': round(sharpe, 2),
                 'volatility': round(ann_vol * 100, 1)
             }
-        except:
-            pass
+        except Exception as e:
+            st.warning(f"Failed {t}: {e}")
     return result
 
 # ----------------------------------------------------------------------
@@ -296,7 +301,7 @@ def enhance_portfolio(df_port):
     }
 
 # ----------------------------------------------------------------------
-# ----------------------- CSV → PORTFOLIO SUMMARY ----------------------
+# ----------------------- CSV → PORTFOLIO -----------------------------
 # ----------------------------------------------------------------------
 def parse_portfolio_csv(file_obj):
     required = ['Symbol', 'Quantity', 'Last Price', 'Current Value', 'Average Cost Basis']
@@ -307,67 +312,58 @@ def parse_portfolio_csv(file_obj):
         else:
             df = pd.read_csv(file_obj)
     except Exception as e:
-        st.error(f"Failed to read CSV: {e}")
+        st.error(f"CSV read error: {e}")
         return pd.DataFrame()
 
     missing = [c for c in required if c not in df.columns]
     if missing:
-        st.error(f"CSV missing columns: {', '.join(missing)}")
+        st.error(f"Missing: {', '.join(missing)}")
         return pd.DataFrame()
 
-    df = df[required].copy()
-    df = df.dropna(subset=required, how='any')
+    df = df[required].copy().dropna(subset=required)
     df = df[df['Symbol'].astype(str).str.strip() != '']
-    df = df[~df['Symbol'].astype(str).str.strip().str.lower().isin(
-        ['symbol', 'account number', 'nan', 'account name', ''])]
+    df = df[~df['Symbol'].astype(str).str.strip().str.lower().isin(['symbol', 'nan', 'account'])]
 
     if df.empty:
-        st.error("No valid rows in CSV.")
         return pd.DataFrame()
 
     for col in ['Quantity', 'Last Price', 'Current Value', 'Average Cost Basis']:
-        df[col] = df[col].astype(str).str.replace(r'[\$,]', '', regex=True).str.strip()
+        df[col] = df[col].astype(str).str.replace(r'[\$,]', '', regex=True)
 
-    df['ticker'] = df['Symbol'].astype(str).str.upper().str.strip()
+    df['ticker'] = df['Symbol'].str.upper().str.strip()
     df['shares'] = pd.to_numeric(df['Quantity'], errors='coerce')
     df['price'] = pd.to_numeric(df['Last Price'], errors='coerce')
     df['market_value'] = pd.to_numeric(df['Current Value'], errors='coerce')
     df['cost_basis'] = pd.to_numeric(df['Average Cost Basis'], errors='coerce')
 
-    df = df.dropna(subset=['shares', 'price', 'market_value', 'cost_basis'])
-    if df.empty:
-        st.error("No numeric data after cleaning.")
-        return pd.DataFrame()
-
+    df = df.dropna(subset=['shares', 'market_value'])
     total = df['market_value'].sum()
     df['allocation'] = df['market_value'] / total * 100
     return df[['ticker', 'allocation', 'market_value', 'shares', 'cost_basis']]
 
 # ----------------------------------------------------------------------
-# ----------------------- PEER BENCHMARK -------------------------------
+# ----------------------- PEER + S&P HISTORY ---------------------------
 # ----------------------------------------------------------------------
 def peer_benchmark(current):
     vs = current - PEER_NET_WORTH_40YO
-    pct = min(100, max(0, (current / PEER_NET_WORTH_40YO) * 50))
+    pct = min(100  , max(0, (current / PEER_NET_WORTH_40YO) * 50))
     return pct, vs
 
-# ----------------------------------------------------------------------
-# ----------------------- S&P 500 HISTORY (CACHED) ---------------------
-# ----------------------------------------------------------------------
 @st.cache_data(ttl=3600)
 def fetch_sp500_history():
     try:
-        aggs = polygon_client.get_aggs(SP500_TICKER, 1, 'day', '2020-01-01', '2025-11-11')
-        dates = [datetime.fromtimestamp(a.timestamp / 1000) for a in aggs]
-        closes = [a.close for a in aggs]
-        df = pd.DataFrame({'Date': dates, 'Close': closes})
-        df.set_index('Date', inplace=True)
+        aggs = polygon_client.get_aggs(SP500_TICKER, 1, "day", "2020-01-01", "2025-11-12")
+        df = pd.DataFrame([
+            {"Date": datetime.fromtimestamp(a.timestamp / 1000), "Close": a.close}
+            for a in aggs
+        ])
+        df.set_index("Date", inplace=True)
         return df
     except:
         return pd.DataFrame()
 
 # ----------------------------------------------------------------------
-# --------------------------- UI ---------------------------------------
+# ------------------------------- UI ----------------------------------
 # ----------------------------------------------------------------------
 st.set_page_config(page_title="S.A.G.E. | Your Wealth Teammate", layout="wide")
 st.title("S.A.G.E. | **Strategic Asset Growth Engine**")
@@ -375,38 +371,28 @@ st.caption("*Your co-pilot in compounding. We grow together.*")
 
 # Load data
 df = get_monthly_updates()
-df_net = pd.DataFrame(columns=['date', 'value'])
+df_net = pd.DataFrame()
 if not df.empty:
     df["date"] = pd.to_datetime(df["date"])
-    df_net = (
-        df[df["person"].isin(["Sean", "Kim"])]
-        .groupby("date")["value"].sum()
-        .reset_index()
-        .sort_values("date")
-    )
+    df_net = df[df["person"].isin(["Sean", "Kim"])].groupby("date")["value"].sum().reset_index()
     df_net["date"] = df_net["date"].dt.tz_localize(None)
 
-# ------------------------------------------------------------------
-# --------------------- TOP SUMMARY (Peer + YTD) -------------------
-# ------------------------------------------------------------------
+# Top Summary
 if not df.empty:
     cur_total = df_net["value"].iloc[-1]
     pct, vs = peer_benchmark(cur_total)
     st.markdown(f"### **vs. Avg 40yo: Top {100-int(pct)}%** | Delta: **{vs:+,}**")
 
     st.markdown("#### **YTD Performance**")
-    col1, col2, col3 = st.columns(3)
+    cols = st.columns(3)
     current_year = datetime.now().year
-    for person, col in zip(["Sean", "Kim", "Taylor"], [col1, col2, col3]):
-        person_df = df[df["person"] == person].copy()
-        if not person_df.empty:
-            person_df = person_df.sort_values("date")
-            ytd_data = person_df[person_df["date"].dt.year == current_year]
-            if len(ytd_data) > 1:
-                start_val = ytd_data["value"].iloc[0]
-                current_val = ytd_data["value"].iloc[-1]
-                ytd_pct = (current_val / start_val - 1) * 100
-                col.metric(f"**{person}'s YTD**", f"{ytd_pct:+.1f}%")
+    for person, col in zip(["Sean", "Kim", "Taylor"], cols):
+        pdf = df[df["person"] == person]
+        if not pdf.empty:
+            ytd = pdf[pdf["date"].dt.year == current_year]
+            if len(ytd) > 1:
+                pct_ytd = (ytd["value"].iloc[-1] / ytd["value"].iloc[0] - 1) * 100
+                col.metric(f"**{person}'s YTD**", f"{pct_ytd:+.1f}%")
             else:
                 col.metric(f"**{person}'s YTD**", "—")
         else:
@@ -414,85 +400,61 @@ if not df.empty:
 
     st.markdown("---")
 
-# ------------------------------------------------------------------
-# SIDEBAR – PORTFOLIO + S.A.G.E. AI
-# ------------------------------------------------------------------
+# Sidebar
 with st.sidebar:
     with st.expander("S.A.G.E. – Your AI Teammate", expanded=True):
-        st.subheader("Upload Portfolio CSV")
-        port_file = st.file_uploader(
-            "CSV (Symbol, Quantity, etc.)",
-            type="csv",
-            key="port",
-            help="We’ll keep it safe and ready for every session"
-        )
+        port_file = st.file_uploader("Upload Portfolio CSV", type="csv", key="port")
         df_port = pd.DataFrame()
 
         if port_file:
             df_port = parse_portfolio_csv(port_file)
             if not df_port.empty:
-                st.success(f"Got it! {len(df_port)} holdings loaded. We’re ready to grow.")
-                csv_b64 = base64.b64encode(port_file.getvalue()).decode()
-                save_portfolio_csv(csv_b64)
-                st.session_state.portfolio_csv = csv_b64
+                st.success(f"Loaded {len(df_port)} holdings!")
+                b64 = base64.b64encode(port_file.getvalue()).decode()
+                save_portfolio_csv(b64)
+                st.session_state.portfolio_csv = b64
         else:
             if st.session_state.portfolio_csv is None:
                 st.session_state.portfolio_csv = load_portfolio_csv()
             if st.session_state.portfolio_csv:
                 try:
-                    csv_bytes = base64.b64decode(st.session_state.portfolio_csv)
-                    df_port = parse_portfolio_csv(csv_bytes.decode())
+                    df_port = parse_portfolio_csv(base64.b64decode(st.session_state.portfolio_csv).decode())
                     if not df_port.empty:
-                        st.success(f"Welcome back! {len(df_port)} holdings loaded.")
+                        st.success(f"Welcome back! {len(df_port)} holdings.")
                 except:
                     pass
 
         df_enhanced, metrics = enhance_portfolio(df_port) if not df_port.empty else (pd.DataFrame(), {})
         if metrics:
-            st.metric("Portfolio Value", f"${metrics.get('total_value', 0):,.0f}")
-            col1, col2 = st.columns(2)
-            col1.metric("1Y Return", f"{metrics.get('1y_return', 0):+.1f}%")
-            col2.metric("vs S&P 500", f"{metrics.get('sp500_1y', 0):+.1f}%" if metrics.get('sp500_1y') else "—")
+            st.metric("Portfolio Value", f"${metrics['total_value']:,.0f}")
+            c1, c2 = st.columns(2)
+            c1.metric("1Y Return", f"{metrics['1y_return']:+.1f}%")
+            c2.metric("vs S&P 500", f"{metrics['sp500_1y']:+.1f}%" if metrics['sp500_1y'] else "—")
 
-        st.subheader("Chat with S.A.G.E.")
-        if st.button("Let’s Talk Strategy", disabled=df_port.empty):
+        if st.button("Chat with S.A.G.E.", disabled=df_port.empty):
             st.session_state.page = "ai"
             st.rerun()
 
-        # BONUS: Refresh Market Data
         if st.button("Refresh Market Data Now"):
             st.cache_data.clear()
-            st.success("Market data refreshed! Give me 10 sec...")
+            st.success("Refreshing market data...")
             st.rerun()
 
     st.markdown("---")
 
-    # === DATABASE RESET + BULK IMPORT ===
     with st.expander("Database Reset & Bulk Import", expanded=False):
-        st.subheader("Bulk Import Monthly Data")
-        monthly_file = st.file_uploader(
-            "CSV (date, person, account_type, value)",
-            type="csv",
-            key="monthly",
-            help="Use after reset"
-        )
-
+        monthly_file = st.file_uploader("CSV (date, person, account_type, value)", type="csv", key="monthly")
         if monthly_file:
             try:
                 df_import = pd.read_csv(monthly_file)
-                required = ['date', 'person', 'account_type', 'value']
-                if all(col in df_import.columns for col in required):
+                req = ['date', 'person', 'account_type', 'value']
+                if all(c in df_import.columns for c in req):
                     df_import['date'] = pd.to_datetime(df_import['date']).dt.date
-                    for _, row in df_import.iterrows():
-                        add_monthly_update(
-                            row['date'], row['person'],
-                            row['account_type'], float(row['value'])
-                        )
+                    for _, r in df_import.iterrows():
+                        add_monthly_update(r['date'], r['person'], r['account_type'], float(r['value']))
                     st.success(f"Imported {len(df_import)} rows!")
-                    csv_b64 = base64.b64encode(monthly_file.getvalue()).decode()
-                    st.session_state.monthly_data_csv = csv_b64
                 else:
-                    st.error(f"Missing columns. Need: {required}")
+                    st.error(f"Need: {req}")
             except Exception as e:
                 st.error(f"Import failed: {e}")
 
@@ -504,13 +466,10 @@ with st.sidebar:
                 sess.commit()
                 sess.close()
                 st.session_state.portfolio_csv = None
-                st.session_state.monthly_data_csv = None
                 st.success("Database reset!")
                 st.rerun()
 
     st.markdown("---")
-
-    # === MANUAL MONTHLY UPDATE ===
     st.subheader("Add Monthly Update")
     accounts = load_accounts()
     person = st.selectbox("Person", list(accounts.keys()))
@@ -525,7 +484,6 @@ with st.sidebar:
         st.success("Saved!")
         st.rerun()
 
-    # === GOALS ===
     st.subheader("Add Goal")
     g_name = st.text_input("Name")
     g_target = st.number_input("Target ($)", min_value=0.0)
@@ -572,7 +530,7 @@ Portfolio: {portfolio_data}
 Let’s review and grow together.
 """
 
-                with st.spinner("S.A.G.E. is warming up the engines..."):
+                with st.spinner("S.A.G.E. is warming up..."):
                     response = chat.send_message(init_prompt)
                     reply = response.text
 
@@ -586,19 +544,19 @@ Let’s review and grow together.
                 with st.chat_message("assistant" if msg["role"] == "model" else "user"):
                     st.markdown(msg["content"])
 
-                user_input = st.chat_input("Ask S.A.G.E. anything: rebalance, goals, taxes...")
-                if user_input:
-                    st.session_state.ai_messages.append({"role": "user", "content": user_input})
-                    save_ai_message("user", user_input)
-                    with st.spinner("S.A.G.E. is thinking with you..."):
-                        response = chat.send_message(user_input)
-                        reply = response.text
-                    st.session_state.ai_messages.append({"role": "model", "content": reply})
-                    save_ai_message("model", reply)
-                    st.rerun()
+            user_input = st.chat_input("Ask S.A.G.E. anything...")
+            if user_input:
+                st.session_state.ai_messages.append({"role": "user", "content": user_input})
+                save_ai_message("user", user_input)
+                with st.spinner("S.A.G.E. is thinking..."):
+                    response = chat.send_message(user_input)
+                    reply = response.text
+                st.session_state.ai_messages.append({"role": "model", "content": reply})
+                save_ai_message("model", reply)
+                st.rerun()
 
         except Exception as e:
-            st.error(f"Oops! S.A.G.E. hit a snag: {e}")
+            st.error(f"S.A.G.E. error: {e}")
 
     if st.button("Clear Chat"):
         st.session_state.ai_messages = []
@@ -659,6 +617,5 @@ else:
             st.write(f"**{g.name}**: ${cur:,.0f} / ${g.target:,.0f}")
 
         st.download_button("Export Monthly Data", df.to_csv(index=False).encode(), "monthly_data.csv")
-
     else:
         st.info("Upload your portfolio CSV and add a monthly update. S.A.G.E. is ready.")
