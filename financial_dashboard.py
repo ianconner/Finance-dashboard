@@ -78,11 +78,7 @@ You're not just an advisor — you're a teammate. Their win is your win. Let’s
 # --------------------------- PEER BENCHMARK ---------------------------
 # ----------------------------------------------------------------------
 def peer_benchmark(current: float):
-    """
-    Returns:
-        pct (0-100) – how far above the average 40-year-old net-worth we are
-        vs  – dollar difference (positive = ahead)
-    """
+    """Returns (pct, vs_dollar) vs average 40yo net worth."""
     vs = current - PEER_NET_WORTH_40YO
     pct = min(100, max(0, (current / PEER_NET_WORTH_40YO) * 50))
     return pct, vs
@@ -233,7 +229,7 @@ def load_portfolio_csv():
 # ----------------------- ENHANCED PORTFOLIO PARSER --------------------
 # ----------------------------------------------------------------------
 def parse_portfolio_csv(file_obj):
-    required = ['Symbol', 'Quantity', 'Last Price', 'Current Value', 'Cost Basis Total', 'Average Cost Basis']
+    required = ['Symbol', 'Quantity', 'Last Price', 'Current Value', 'Cost Basis Total']
     try:
         if isinstance(file_obj, str):
             from io import StringIO
@@ -259,7 +255,7 @@ def parse_portfolio_csv(file_obj):
         st.error("No valid rows in CSV.")
         return pd.DataFrame(), {}
 
-    for col in ['Quantity', 'Last Price', 'Current Value', 'Cost Basis Total', 'Average Cost Basis']:
+    for col in ['Quantity', 'Last Price', 'Current Value', 'Cost Basis Total']:
         df[col] = df[col].astype(str).str.replace(r'[\$,]', '', regex=True).str.strip()
         df[col] = pd.to_numeric(df[col], errors='coerce')
 
@@ -399,7 +395,8 @@ if not df.empty:
         .reset_index()
         .sort_values("date")
     )
-    df_net["date"] = df_net["date"].dt.tz_localization(None)
+    # FIX: Correct method name
+    df_net["date"] = df_net["date"].dt.tz_localize(None)
 
 # ------------------------------------------------------------------
 # --------------------- TOP SUMMARY (Peer + YTD) -------------------
@@ -501,7 +498,7 @@ with st.sidebar:
 
     st.markdown("---")
     st.subheader("Add Update")
-    accounts = load_db_accounts()
+    accounts = load_accounts()
     person = st.selectbox("Person", list(accounts.keys()))
     acct = st.selectbox("Account", accounts.get(person, []))
     col1, col2 = st.columns(2)
@@ -559,7 +556,6 @@ if st.session_state.page == "ai":
             st.error(f"AI init failed: {e}")
             st.stop()
 
-        # Auto-init message
         if not st.session_state.ai_messages and not df_port.empty:
             metrics = get_portfolio_metrics(df_port, df_net)
             init_prompt = f"""
@@ -585,7 +581,6 @@ Portfolio: {df_port[['ticker', 'allocation']].round(3).to_dict('records')}
             save_ai_message("model", reply)
             st.rerun()
 
-        # Display chat
         for msg in st.session_state.ai_messages:
             role = "assistant" if msg["role"] == "model" else "user"
             with st.chat_message(role):
