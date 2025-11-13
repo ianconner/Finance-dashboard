@@ -395,7 +395,6 @@ if not df.empty:
         .reset_index()
         .sort_values("date")
     )
-    # FIX: Correct method name
     df_net["date"] = df_net["date"].dt.tz_localize(None)
 
 # ------------------------------------------------------------------
@@ -498,7 +497,7 @@ with st.sidebar:
 
     st.markdown("---")
     st.subheader("Add Update")
-    accounts = load_accounts()
+    accounts = load_accounts()  # ← Fixed: was load_db_accounts()
     person = st.selectbox("Person", list(accounts.keys()))
     acct = st.selectbox("Account", accounts.get(person, []))
     col1, col2 = st.columns(2)
@@ -630,6 +629,7 @@ else:
         st.subheader("ROR vs S&P 500")
         df_net['ror'] = df_net['value'].pct_change() * 100
         df_ror = df_net.dropna(subset=['ror']).copy()
+
         if len(df_ror) >= 2:
             sp_data = fetch_ticker('^GSPC', period="5y")
             if sp_data is not None and not sp_data.empty:
@@ -637,39 +637,45 @@ else:
                 sp_df['Date'] = pd.to_datetime(sp_df['Date']).dt.tz_localize(None)
                 sp_df['sp_ror'] = sp_df['price'].pct_change() * 100
                 sp_df = sp_df.dropna(subset=['sp_ror'])
+
+                if 'Date' in sp_df.columns and 'sp_ror' in sp_df.columns:
+                    df_ror = pd.merge_asof(
+                        df_ror[['date', 'ror']].sort_values('date'),
+                        sp_df[['Date', 'sp_ror']].sort_values('Date'),
+                        left_on='date', right_on='Date',
+                        direction='nearest', tolerance=pd.Timedelta('1M')
+                    )
+                    df_ror = df_ror.dropna(subset=['sp_ror'])
+                    use_live_sp = True
+                else:
+                    use_live_sp = False
             else:
+                use_live_sp = False
+
+            if not use_live_sp:
                 st.info("Live S&P 500 data unavailable – using historic average.")
                 df_ror['sp_ror'] = HISTORICAL_SP_MONTHLY * 100
-                sp_df = pd.DataFrame({"price": [1.0, 1.0 * (1 + HISTORICAL_SP_MONTHLY * 12)]})
+                dummy_price = [1.0, 1.0 * (1 + HISTORICAL_SP_MONTHLY * 12)]
+                sp_df = pd.DataFrame({"price": dummy_price})
 
-            df_ror = pd.merge_asof(df_ror[['date', 'ror']].sort_values('date'),
-                                   sp_df[['Date', 'sp_ror']].sort_values('Date'),
-                                   left_on='date', right_on='Date',
-                                   direction='nearest', tolerance=pd.Timedelta('1M'))
-            df_ror = df_ror.dropna(subset=['sp_ror'])
-
-            if not df_ror.empty:
-                fig_ror = go.Figure()
-                fig_ror.add_trace(go.Bar(x=df_ror['date'], y=df_ror['ror'], name='Personal'))
-                fig_ror.add_trace(go.Bar(x=df_ror['date'], y=df_ror['sp_ror'], name='S&P 500'))
-                fig_ror.update_layout(title="Monthly ROR", barmode='group')
-                st.plotly_chart(fig_ror, use_container_width=True)
-
-                periods = len(df_net) / 12
-                ann_p = (df_net['value'].iloc[-1] / df_net['value'].iloc[0]) ** (1/periods) - 1
-                ann_s = (sp_df['price'].iloc[-1] / sp_df['price'].iloc[0]) ** (1/periods) - 1
-                st.metric("Annualized Personal ROR", f"{ann_p*100:.2f}%")
-                st.metric("Annualized S&P 500 ROR", f"{ann_s*100:.2f}%")
-            else:
-                st.info("Not enough overlapping data.")
-        else:
-            st.info("S&P 500 data unavailable – using static avg.")
-            df_ror['sp_ror'] = HISTORICAL_SP_MONTHLY * 100
             fig_ror = go.Figure()
             fig_ror.add_trace(go.Bar(x=df_ror['date'], y=df_ror['ror'], name='Personal'))
-            fig_ror.add_trace(go.Bar(x=df_ror['date'], y=df_ror['sp_ror'], name='S&P Avg'))
-            fig_ror.update_layout(title="Monthly ROR (vs static avg)", barmode='group')
+            fig_ror.add_trace(go.Bar(x=df_ror['date'], y=df_ror['sp_ror'], name='S&P 500'))
+            fig_ror.update_layout(title="Monthly ROR", barmode='group', height=400)
             st.plotly_chart(fig_ror, use_container_width=True)
+
+            periods = len(df_net) / 12
+            if periods > 0:
+                ann_p = (df_net['value'].iloc[-1] / df_net['value'].iloc[0]) ** (1/periods) - 1
+                if use_live_sp and len(sp_df) > 1:
+                    ann_s = (sp_df['price'].iloc[-1] / sp_df['price'].iloc[0]) ** (1/periods) - 1
+                else:
+                    ann_s = HISTORICAL_SP_MONTHLY * 12
+                col1, col2 = st.columns(2)
+                col1.metric("Annualized Personal ROR", f"{ann_p*100:.2f}%")
+                col2.metric("Annualized S&P 500 ROR", f"{ann_s*100:.2f}%")
+        else:
+            st.info("Need at least 2 months of data to show ROR.")
 
         tab1, tab2 = st.tabs(["YTD", "M2M"])
         with tab1:
