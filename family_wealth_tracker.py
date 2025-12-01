@@ -131,7 +131,7 @@ with st.sidebar:
         import pandas as pd
         
         # Your old Aiven connection string (replace with your actual one if different)
-        OLD_DB_URL = postgres://avnadmin:AVNS_0RVLt4scNnNPCQosxd5@sonic-dash-sonic-dash.c.aivencloud.com:11057/defaultdb?sslmode=require"
+        OLD_DB_URL = "postgres://avnadmin:AVNS_0RVLt4scNnNPCQosxd5@sonic-dash-sonic-dash.c.aivencloud.com:11057/defaultdb?sslmode=require"
         
         try:
             with st.spinner("Connecting to old Aiven database..."):
