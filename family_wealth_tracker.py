@@ -127,7 +127,7 @@ else:
 
 # Year-over-Year Table (exactly like your Excel)
 st.subheader("Year-over-Year Summary")
-yoy = df.groupby(df.date.dt.year)["total.agg(["last"]).reset_index()
+yoy = df.groupby(df.date.dt.year)["total"].agg("last").reset_index()
 yoy["YoY $"] = yoy["last"].diff()
 yoy["YoY %"] = yoy["last"].pct_change()
 yoy = yoy.round(0)
