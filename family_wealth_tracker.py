@@ -125,6 +125,38 @@ with st.sidebar:
         except Exception as e:
             st.error(f"Error: {e}")
 
+    # ←←← MIGRATE FROM OLD AIVEN DB TO NEW FIREBASE (ONE CLICK) ←←←
+    if st.button("🚀 Migrate ALL Data from Old Aiven DB → New Firebase", type="primary"):
+        import psycopg2
+        import pandas as pd
+        
+        # Your old Aiven connection string (replace with your actual one if different)
+        OLD_DB_URL = postgres://avnadmin:AVNS_0RVLt4scNnNPCQosxd5@sonic-dash-sonic-dash.c.aivencloud.com:11057/defaultdb?sslmode=require"
+        
+        try:
+            with st.spinner("Connecting to old Aiven database..."):
+                conn = psycopg2.connect(OLD_DB_URL)
+                old_df = pd.read_sql("SELECT date, sean, kim, total FROM monthly_data ORDER BY date", conn)
+                conn.close()
+            
+            if old_df.empty:
+                st.warning("No data found in old database.")
+            else:
+                progress = st.progress(0)
+                for i, row in old_df.iterrows():
+                    # Convert date if needed
+                    date_obj = pd.to_datetime(row["date"]).date()
+                    save_monthly(date_obj, float(row["sean"]), float(row["kim"]), float(row["total"]))
+                    progress.progress((i + 1) / len(old_df))
+                
+                st.success(f"Successfully migrated {len(old_df)} months from old Aiven DB!")
+                st.balloons()
+                st.rerun()
+                
+        except Exception as e:
+            st.error(f"Connection failed: {e}")
+            st.info("Make sure your old Aiven connection string is correct above.")
+
 # ========================== MAIN DASHBOARD (only if data exists) ==========================
 if df.empty:
     st.info("No data yet – add your first month in the sidebar on the left!")
