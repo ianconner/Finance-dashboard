@@ -8,15 +8,19 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 import yfinance as yf
 import google.generativeai as genai
+import json
 
-# ========================== FIREBASE ==========================
+# Load Firebase from secrets
+firebase_creds = st.secrets["FIREBASE_CREDENTIALS"]
+cred_dict = json.loads(firebase_creds)
+cred = credentials.Certificate(cred_dict)
+
 if not firebase_admin._apps:
-    cred = credentials.Certificate("firebase-key.json")
     firebase_admin.initialize_app(cred)
 db = firestore.client()
 
-# ========================== GEMINI ==========================
-genai.configure(api_key=st.secrets["GEMINI_API_KEY"])  # ← put your Gemini key in Streamlit secrets
+# Gemini (already in your code)
+genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
 model = genai.GenerativeModel("gemini-1.5-flash")
 
 # ========================== DATA HELPERS ==========================
