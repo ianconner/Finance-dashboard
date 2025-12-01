@@ -68,14 +68,15 @@ st.markdown("#### Sean • Kim • Combined  |  Powered by S.A.G.E. your
 # ========================== LOAD DATA ==========================
 df = load_data()
 
-# ========================== SIDEBAR – INPUT ==========================
+# ========================== SIDEBAR – INPUT (always visible) ==========================
 with st.sidebar:
     st.header("Add / Update Month")
-    new_date = st.date_input("Month", value=datetime.today().replace(day=1), format="MM/DD/YYYY")
+    new_date = st.date_input("Month", value=datetime.today().replace(day=1), format="YYYY-MM")
     sean = st.number_input("Sean's Net Worth ($)", value=0.0, step=1000.0, format="%.0f")
     kim = st.number_input("Kim's Net Worth ($)", value=0.0, step=1000.0, format="%.0f")
     total = sean + kim
-    if st.button("Save Month"):
+
+    if st.button("Save Month", type="primary", use_container_width=True):
         save_monthly(new_date, sean, kim, total)
         st.success(f"{new_date:%b %Y} saved!")
         st.rerun()
@@ -84,32 +85,28 @@ with st.sidebar:
     st.header("Data Tools")
     csv_data = export_csv()
     if csv_data:
-        st.download_button("Download Full Backup CSV", csv_data, "family_wealth_backup.csv", "text/csv")
+        st.download_button("Download Backup CSV", csv_data, "family_wealth_backup.csv", "text/csv")
 
-    if st.button("Clear All Data (careful!)"):
-        for doc in db.collection(COLLECTION).stream():
-            doc.reference.delete()
-        st.success("All data cleared")
-        st.rerun()
-
-# ========================== MAIN DASHBOARD ==========================
+# ========================== MAIN DASHBOARD (only if data exists) ==========================
 if df.empty:
-    st.info("No data yet – use the sidebar on the left to add your first month!")
-else:
-    # Only put the big dashboard inside the else so the sidebar always stays visible
-    # Current numbers
-    latest = df.iloc[-1]
-    prev = df.iloc[-2] if len(df)>1 else latest
+    st.info("No data yet – add your first month in the sidebar on the left!")
+    st.stop()
 
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Sean's Net Worth", f"${latest.sean:,.0f}", f"{latest.sean-prev.sean:+,.0f}")
-    col2.metric("Kim's Net Worth", f"${latest.kim:,.0f}", f"{latest.kim-prev.kim:+,.0f}")
-    col3.metric("Total Family Net Worth", f"${latest.total:,.0f}", f"{latest.total-prev.total:+,.0f}", delta_color="normal")
-    col4.metric("Monthly Change %", f"{(latest.total/prev.total-1)*100:+.2f}%")
+# Now we know df has at least one row
+df["date"] = pd.to_datetime(df["date"])
+df = df.sort_values("date").reset_index(drop=True)
 
-    # ← move EVERYTHING else that was below this point (charts, tables, goals, S.A.G.E.) 
-    #   inside this else block or after it — just indent it 4 spaces
+latest = df.iloc[-1]
+prev = df.iloc[-2] if len(df) > 1 else latest
 
+# Rest of your beautiful dashboard (metrics, charts, etc.) stays exactly the same below this line
+col1, col2, col3, col4 = st.columns(4)
+col1.metric("Sean's Net Worth", f"${latest.sean:,.0f}", f"{latest.sean-prev.sean:+,.0f}")
+col2.metric("Kim's Net Worth", f"${latest.kim:,.0f}", f"{latest.kim-prev.kim:+,.0f}")
+col3.metric("Total Family Net Worth", f"${latest.total:,.0f}", f"{latest.total-prev.total:+,.0f}", delta_color="normal")
+col4.metric("Monthly Change %", f"{(latest.total/prev.total-1)*100:+.2f}%")
+
+# ... (all your charts, YoY table, goals, S.A.G.E. stay exactly as they are)
 df["date"] = pd.to_datetime(df["date"])
 df = df.sort_values("date").reset_index(drop=True)
 
