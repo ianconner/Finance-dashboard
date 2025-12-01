@@ -86,6 +86,24 @@ with st.sidebar:
     csv_data = export_csv()
     if csv_data:
         st.download_button("Download Backup CSV", csv_data, "family_wealth_backup.csv", "text/csv")
+    
+    st.divider()
+    st.subheader("🔽 Migration Tools")
+
+    # DOWNLOAD EVERYTHING FROM THE CURRENT (OLD) DB
+    if st.button("Download ALL Historical Data as CSV", type="primary"):
+        full_csv = export_csv()
+        if full_csv:
+            st.download_button(
+                label="⬇️ Save Your Complete History Now",
+                data=full_csv,
+                file_name=f"family_wealth_full_backup_{datetime.today():%Y-%m-%d}.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
+            st.success("Ready! Click the button above to download.")
+        else:
+            st.warning("No data yet – add some months first.")
 
 # ========================== MAIN DASHBOARD (only if data exists) ==========================
 if df.empty:
