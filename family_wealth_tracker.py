@@ -71,7 +71,7 @@ df = load_data()
 # ========================== SIDEBAR – INPUT (always visible) ==========================
 with st.sidebar:
     st.header("Add / Update Month")
-    new_date = st.date_input("Month", value=datetime.today().replace(day=1), format="YYYY-MM")
+    new_date = st.date_input("Month", value=datetime.today().replace(day=1), format="MM/DD/YYYY")
     sean = st.number_input("Sean's Net Worth ($)", value=0.0, step=1000.0, format="%.0f")
     kim = st.number_input("Kim's Net Worth ($)", value=0.0, step=1000.0, format="%.0f")
     total = sean + kim
