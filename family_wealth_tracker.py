@@ -68,15 +68,14 @@ st.markdown("#### Sean • Kim • Combined  |  Powered by S.A.G.E. your
 # ========================== LOAD DATA ==========================
 df = load_data()
 
-# ========================== SIDEBAR – INPUT (always visible) ==========================
+# ========================== SIDEBAR – INPUT ==========================
 with st.sidebar:
     st.header("Add / Update Month")
-    new_date = st.date_input("Month", value=datetime.today().replace(day=1), format="MM/DD/YYYY")
+    new_date = st.date_input("Month", value=datetime.today().replace(day=1), format="YYYY-MM")
     sean = st.number_input("Sean's Net Worth ($)", value=0.0, step=1000.0, format="%.0f")
     kim = st.number_input("Kim's Net Worth ($)", value=0.0, step=1000.0, format="%.0f")
     total = sean + kim
-
-    if st.button("Save Month", type="primary", use_container_width=True):
+    if st.button("Save Month"):
         save_monthly(new_date, sean, kim, total)
         st.success(f"{new_date:%b %Y} saved!")
         st.rerun()
@@ -85,8 +84,14 @@ with st.sidebar:
     st.header("Data Tools")
     csv_data = export_csv()
     if csv_data:
-        st.download_button("Download Backup CSV", csv_data, "family_wealth_backup.csv", "text/csv")
-    
+        st.download_button("Download Full Backup CSV", csv_data, "family_wealth_backup.csv", "text/csv")
+
+    if st.button("Clear All Data (careful!)"):
+        for doc in db.collection(COLLECTION).stream():
+            doc.reference.delete()
+        st.success("All data cleared")
+        st.rerun()
+
     st.divider()
     st.subheader("🔽 Migration Tools")
 
@@ -125,58 +130,11 @@ with st.sidebar:
         except Exception as e:
             st.error(f"Error: {e}")
 
-    # ←←← MIGRATE FROM OLD AIVEN DB TO NEW FIREBASE (ONE CLICK) ←←←
-    if st.button("🚀 Migrate ALL Data from Old Aiven DB → New Firebase", type="primary"):
-        import psycopg2
-        import pandas as pd
-        
-        # Your old Aiven connection string (replace with your actual one if different)
-        OLD_DB_URL = "postgres://avnadmin:AVNS_0RVLt4scNnNPCQosxd5@sonic-dash-sonic-dash.c.aivencloud.com:11057/defaultdb?sslmode=require"
-        
-        try:
-            with st.spinner("Connecting to old Aiven database..."):
-                conn = psycopg2.connect(OLD_DB_URL)
-                old_df = pd.read_sql("SELECT date, sean, kim, total FROM monthly_data ORDER BY date", conn)
-                conn.close()
-            
-            if old_df.empty:
-                st.warning("No data found in old database.")
-            else:
-                progress = st.progress(0)
-                for i, row in old_df.iterrows():
-                    # Convert date if needed
-                    date_obj = pd.to_datetime(row["date"]).date()
-                    save_monthly(date_obj, float(row["sean"]), float(row["kim"]), float(row["total"]))
-                    progress.progress((i + 1) / len(old_df))
-                
-                st.success(f"Successfully migrated {len(old_df)} months from old Aiven DB!")
-                st.balloons()
-                st.rerun()
-                
-        except Exception as e:
-            st.error(f"Connection failed: {e}")
-            st.info("Make sure your old Aiven connection string is correct above.")
-
-# ========================== MAIN DASHBOARD (only if data exists) ==========================
+# ========================== MAIN DASHBOARD ==========================
 if df.empty:
-    st.info("No data yet – add your first month in the sidebar on the left!")
+    st.info("No data yet – add your first month on the left!")
     st.stop()
 
-# Now we know df has at least one row
-df["date"] = pd.to_datetime(df["date"])
-df = df.sort_values("date").reset_index(drop=True)
-
-latest = df.iloc[-1]
-prev = df.iloc[-2] if len(df) > 1 else latest
-
-# Rest of your beautiful dashboard (metrics, charts, etc.) stays exactly the same below this line
-col1, col2, col3, col4 = st.columns(4)
-col1.metric("Sean's Net Worth", f"${latest.sean:,.0f}", f"{latest.sean-prev.sean:+,.0f}")
-col2.metric("Kim's Net Worth", f"${latest.kim:,.0f}", f"{latest.kim-prev.kim:+,.0f}")
-col3.metric("Total Family Net Worth", f"${latest.total:,.0f}", f"{latest.total-prev.total:+,.0f}", delta_color="normal")
-col4.metric("Monthly Change %", f"{(latest.total/prev.total-1)*100:+.2f}%")
-
-# ... (all your charts, YoY table, goals, S.A.G.E. stay exactly as they are)
 df["date"] = pd.to_datetime(df["date"])
 df = df.sort_values("date").reset_index(drop=True)
 
