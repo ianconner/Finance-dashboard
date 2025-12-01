@@ -16,7 +16,7 @@ if not firebase_admin._apps:
         "type": st.secrets["firebase_admin"]["type"],
         "project_id": st.secrets["firebase_admin"]["project_id"],
         "private_key_id": st.secrets["firebase_admin"]["private_key_id"],
-        "private_key": st.secrets["firebase_admin"]["private_key"],
+        "private_key": st.secrets["firebase_admin"]["private_key"].replace("\\n", "\n"),
         "client_email": st.secrets["firebase_admin"]["client_email"],
         "client_id": st.secrets["firebase_admin"]["client_id"],
         "auth_uri": st.secrets["firebase_admin"]["auth_uri"],
@@ -107,7 +107,7 @@ prev = df.iloc[-2] if len(df)>1 else latest
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("Sean's Net Worth", f"${latest.sean:,.0f}", f"{latest.sean-prev.sean:+,.0f}")
 col2.metric("Kim's Net Worth", f"${latest.kim:,.0f}", f"{latest.kim-prev.kim:+,.0f}")
-col3.metric("Total Family Net Worth", f"${latest.total:,.0f}", f"{latest.total-prev.total:+,.1f}", delta_color="normal")
+col3.metric("Total Family Net Worth", f"${latest.total:,.0f}", f"{latest.total-prev.total:+,.0f}", delta_color="normal")
 col4.metric("Monthly Change %", f"{(latest.total/prev.total-1)*100:+.2f}%")
 
 # Growth Chart – Sean, Kim, Total
@@ -136,8 +136,8 @@ else:
 # Year-over-Year Table (exactly like your Excel)
 st.subheader("Year-over-Year Summary")
 yoy = df.groupby(df.date.dt.year)["total"].agg("last").reset_index()
-yoy["YoY $"] = yoy["last"].diff()
-yoy["YoY %"] = yoy["last"].pct_change()
+yoy["YoY $"] = yoy["total"].diff()
+yoy["YoY %"] = yoy["total"].pct_change()
 yoy = yoy.round(0)
 yoy.columns = ["Year", "Net Worth", "YoY $", "YoY %"]
 yoy["YoY %"] = yoy["YoY %"].map("{:+.1%}".format)
