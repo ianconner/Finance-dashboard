@@ -7,7 +7,7 @@ import google.generativeai as genai
 genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
 
 if not firebase_admin._apps:
-    firebase_admin.initialize_app(credentials.Certificate(st.secrets.firebase_admin.to_dict()))
+    firebase_admin.initialize_app(credentials.Certificate(st.secrets.firebase_admin))
 
 db = firestore.client()
 # Gemini (already in your code)
