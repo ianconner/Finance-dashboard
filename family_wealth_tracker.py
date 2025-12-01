@@ -94,8 +94,21 @@ with st.sidebar:
 
 # ========================== MAIN DASHBOARD ==========================
 if df.empty:
-    st.info("No data yet – add your first month on the left!")
-    st.stop()
+    st.info("No data yet – use the sidebar on the left to add your first month!")
+else:
+    # Only put the big dashboard inside the else so the sidebar always stays visible
+    # Current numbers
+    latest = df.iloc[-1]
+    prev = df.iloc[-2] if len(df)>1 else latest
+
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Sean's Net Worth", f"${latest.sean:,.0f}", f"{latest.sean-prev.sean:+,.0f}")
+    col2.metric("Kim's Net Worth", f"${latest.kim:,.0f}", f"{latest.kim-prev.kim:+,.0f}")
+    col3.metric("Total Family Net Worth", f"${latest.total:,.0f}", f"{latest.total-prev.total:+,.0f}", delta_color="normal")
+    col4.metric("Monthly Change %", f"{(latest.total/prev.total-1)*100:+.2f}%")
+
+    # ← move EVERYTHING else that was below this point (charts, tables, goals, S.A.G.E.) 
+    #   inside this else block or after it — just indent it 4 spaces
 
 df["date"] = pd.to_datetime(df["date"])
 df = df.sort_values("date").reset_index(drop=True)
