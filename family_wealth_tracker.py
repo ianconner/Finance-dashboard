@@ -71,10 +71,21 @@ df = load_data()
 # ========================== SIDEBAR – INPUT ==========================
 with st.sidebar:
     st.header("Add / Update Month")
-    new_date = st.date_input(
+    from dateutil.relativedelta import relativedelta
+
+# Always show the 1st of the current month as default
+default_date = datetime.today().replace(day=1)
+
+new_date = st.date_input(
     "Month",
-    value=datetime.today().replace(day=1),
-    format="YYYY/MM"   # this format works on ALL current Streamlit versions
+    value=default_date,
+    min_value=datetime(2015,  # you can go as far back as you want
+    max_value=datetime.today(),
+    format="YYYY-MM" if "format" in st.date_input.__code__.co_varnames else None
+)
+# Fallback for older Streamlit versions
+if new_date is None:  # very old versions return None
+    new_date = default_date
     sean = st.number_input("Sean's Net Worth ($)", value=0.0, step=1000.0, format="%.0f")
     kim = st.number_input("Kim's Net Worth ($)", value=0.0, step=1000.0, format="%.0f")
     total = sean + kim
