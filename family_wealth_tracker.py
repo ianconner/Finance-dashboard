@@ -1,13 +1,19 @@
 # family_wealth_tracker.py
 import streamlit as st
+import json
 import firebase_admin
 from firebase_admin import credentials, firestore
 import google.generativeai as genai
 
+# Gemini
 genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
 
+# Firebase
+firebase_creds_str = st.secrets["FIREBASE_CREDENTIALS"]
+cred_dict = json.loads(firebase_creds_str)
+
 if not firebase_admin._apps:
-    firebase_admin.initialize_app(credentials.Certificate(st.secrets["firebase_admin"]))
+    firebase_admin.initialize_app(credentials.Certificate(cred_dict))
 
 db = firestore.client()
 # Gemini (already in your code)
