@@ -10,15 +10,16 @@ import yfinance as yf
 import google.generativeai as genai
 import json
 
-# Load Firebase from secrets
-firebase_creds = st.secrets["FIREBASE_CREDENTIALS"]
-cred_dict = json.loads(firebase_creds)
+# Load secrets
+genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+
+firebase_creds_str = st.secrets["FIREBASE_CREDENTIALS"]
+cred_dict = json.loads(firebase_creds_str)
 cred = credentials.Certificate(cred_dict)
 
 if not firebase_admin._apps:
     firebase_admin.initialize_app(cred)
 db = firestore.client()
-
 # Gemini (already in your code)
 genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
 model = genai.GenerativeModel("gemini-1.5-flash")
