@@ -1,24 +1,16 @@
 # family_wealth_tracker.py
 import streamlit as st
-import pandas as pd
-import plotly.express as px
-import plotly.graph_objects as go
-from datetime import datetime
 import firebase_admin
 from firebase_admin import credentials, firestore
-import yfinance as yf
 import google.generativeai as genai
-import json
 
-# Load secrets
+# Gemini
 genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
 
-firebase_creds_str = st.secrets["FIREBASE_CREDENTIALS"]
-cred_dict = json.loads(firebase_creds_str)
-cred = credentials.Certificate(cred_dict)
-
+# Firebase — this is the line that works on Streamlit Cloud
 if not firebase_admin._apps:
-    firebase_admin.initialize_app(cred)
+    firebase_admin.initialize_app(credentials.Certificate(st.secrets["firebase_admin"]))
+
 db = firestore.client()
 # Gemini (already in your code)
 genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
