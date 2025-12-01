@@ -105,6 +105,26 @@ with st.sidebar:
         else:
             st.warning("No data yet – add some months first.")
 
+    # UPLOAD AND IMPORT OLD DATA (works with the CSV you just downloaded or any old one)
+    uploaded_file = st.file_uploader("Upload old CSV to import everything", type=["csv"])
+    if uploaded_file is not None:
+        try:
+            import_df = pd.read_csv(uploaded_file)
+            required_cols = ["date", "sean", "kim", "total"]
+            if not all(col in import_df.columns for col in required_cols):
+                st.error(f"CSV must have columns: {required_cols}")
+            else:
+                import_df["date"] = pd.to_datetime(import_df["date"]).dt.date
+                progress_bar = st.progress(0)
+                for i, row in import_df.iterrows():
+                    save_monthly(row["date"], row["sean"], row["kim"], row["total"])
+                    progress_bar.progress((i + 1) / len(import_df))
+                st.success(f"Imported {len(import_df)} months successfully!")
+                st.balloons()
+                st.rerun()
+        except Exception as e:
+            st.error(f"Error: {e}")
+
 # ========================== MAIN DASHBOARD (only if data exists) ==========================
 if df.empty:
     st.info("No data yet – add your first month in the sidebar on the left!")
