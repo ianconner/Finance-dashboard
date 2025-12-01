@@ -3,6 +3,11 @@ import streamlit as st
 import firebase_admin
 from firebase_admin import credentials, firestore
 import google.generativeai as genai
+from datetime import datetime
+import pandas as pd
+import plotly.graph_objects as go
+import plotly.express as px
+import yfinance as yf
 
 genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
 
