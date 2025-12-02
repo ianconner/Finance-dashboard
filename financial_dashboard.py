@@ -85,7 +85,7 @@ def peer_benchmark(current: float):
     return pct, vs
 
 # ----------------------------------------------------------------------
-# --------------------------- DATABASE SETUP (SAFE!) ------------------
+# --------------------------- DATABASE SETUP (100% SAFE) ---------------
 # ----------------------------------------------------------------------
 try:
     url = st.secrets["postgres_url"]
@@ -103,7 +103,7 @@ try:
         __table_args__ = (PrimaryKeyConstraint('date', 'person', 'account_type'),)
 
     class AccountConfig(Base):
-        __tablename__ extensão "account_config"
+        __tablename__ = "account_config"
         person = Column(String, primary_key=True)
         account_type = Column(String, primary_key=True)
         __table_args__ = (PrimaryKeyConstraint('person', 'account_type'),)
@@ -127,10 +127,10 @@ try:
         csv_data = Column(String)
         uploaded_at = Column(Date, default=datetime.utcnow)
 
-    # Create only our tables — NEVER drop anything
+    # Create only our tables — never drop anything
     Base.metadata.create_all(engine)
 
-    # SAFE MIGRATION: Add missing 'name' column to goals table if needed
+    # SAFE MIGRATION: Add 'name' column if missing (never drops table)
     inspector = inspect(engine)
     if 'goals' in inspector.get_table_names():
         columns = [c['name'] for c in inspector.get_columns('goals')]
@@ -139,7 +139,6 @@ try:
                 conn.execute(text("ALTER TABLE goals ADD COLUMN name VARCHAR"))
                 conn.execute(text("UPDATE goals SET name = 'Goal ' || COALESCE(id::text, target::text) WHERE name IS NULL"))
                 conn.execute(text("ALTER TABLE goals ALTER COLUMN name SET NOT NULL"))
-                # Add primary key only if none exists
                 pk = inspector.get_pk_constraint('goals')
                 if not pk['constrained_columns']:
                     conn.execute(text("ALTER TABLE goals ADD PRIMARY KEY (name)"))
@@ -283,7 +282,8 @@ def parse_portfolio_csv(file_obj):
     df['ticker'] = df['Symbol'].str.upper().str.strip()
     df['market_value'] = df['Current Value']
     df['cost_basis'] = df['Cost Basis Total']
-    df['shares'] = df['  # keep for future use
+    df['shares'] = df['Quantity']  # Fixed line
+    df['price'] = df['Last Price']
     df['unrealized_gain'] = df['market_value'] - df['cost_basis']
     df['pct_gain'] = (df['unrealized_gain'] / df['cost_basis']) * 100
 
@@ -299,7 +299,7 @@ def parse_portfolio_csv(file_obj):
         'top_allocation': df['allocation'].max() * 100 if not df.empty else 0
     }
 
-    return df[['ticker', 'shares', 'market_value', 'allocation', 'pct_gain']], summary
+    return df[['ticker', 'shares', 'price', 'market_value', 'cost_basis', 'unrealized_gain', 'pct_gain', 'allocation']], summary
 
 # ----------------------------------------------------------------------
 # ----------------------- AI PROJECTIONS -------------------------------
@@ -391,6 +391,7 @@ with st.sidebar:
         st.subheader("Upload Portfolio CSV")
         port_file = st.file_uploader("CSV from Fidelity (all accounts)", type="csv", key="port")
         df_port, port_summary = pd.DataFrame(), {}
+
         if port_file:
             df_port, port_summary = parse_portfolio_csv(port_file)
             if not df_port.empty:
@@ -398,6 +399,8 @@ with st.sidebar:
                 csv_b64 = base64.b64encode(port_file.getvalue()).decode()
                 save_portfolio_csv(csv_b64)
                 st.session_state.portfolio_csv = csv_b64
+            else:
+                st.warning("CSV loaded but no valid data.")
         else:
             if st.session_state.portfolio_csv is None:
                 st.session_state.portfolio_csv = load_portfolio_csv()
@@ -407,23 +410,126 @@ with st.sidebar:
                     df_port, port_summary = parse_portfolio_csv(csv_bytes.decode())
                     if not df_port.empty:
                         st.success(f"Loaded {len(df_port)} holdings from memory.")
-                except: pass
+                except Exception as e:
+                    st.error(f"Failed to load saved portfolio: {e}")
 
+        st.subheader("Talk to S.A.G.E.")
         if st.button("Open Strategy Session", disabled=df_port.empty):
             st.session_state.page = "ai"
             st.rerun()
 
     st.markdown("---")
     with st.expander("Data Tools", expanded=False):
-        if st.button("Reset All Data (Use with caution)"):
-            if st.checkbox("I understand this deletes everything"):
+        st.subheader("Bulk Import Monthly")
+        monthly_file = st.file_uploader("CSV (date,person,account_type,value)", type="csv", key="monthly")
+        if monthly_file:
+            try:
+                df_import = pd.read_csv(monthly_file)
+                req = ['date', 'person', 'account_type', 'value']
+                if all(c in df_import.columns for c in req):
+                    df_import['date'] = pd.to_datetime(df_import['date']).dt.date
+                    for _, r in df_import.iterrows():
+                        add_monthly_update(r['date'], r['person'], r['account_type'], float(r['value']))
+                    st.success(f"Imported {len(df_import)} rows!")
+                else:
+                    st.error(f"Need: {req}")
+            except Exception as e:
+                st.error(f"Import error: {e}")
+
+        if st.button("Reset Database"):
+            if st.checkbox("I understand this deletes all data", key="confirm"):
                 reset_database()
-                st.success("Database reset!")
+                sess = get_session()
+                sess.query(PortfolioCSV).delete()
+                sess.commit()
+                sess.close()
+                st.session_state.portfolio_csv = None
+                st.success("Reset complete.")
                 st.rerun()
 
     st.markdown("---")
     st.subheader("Backup & Restore")
-    # [Your full backup/restore code here — unchanged]
+
+    if st.button("Download Full Database Backup (.dump)", type="primary", use_container_width=True):
+        with st.spinner("Creating complete backup..."):
+            try:
+                conn_url = engine.url
+                host = conn_url.host
+                port = conn_url.port or 5432
+                dbname = conn_url.database
+                user = conn_url.username
+                password = str(conn_url.password) if conn_url.password else ""
+
+                with NamedTemporaryFile(delete=False, suffix=".dump") as tmpfile:
+                    dump_path = tmpfile.name
+
+                    cmd = [
+                        "pg_dump",
+                        f"--host={host}",
+                        f"--port={port}",
+                        f"--username={user}",
+                        f"--dbname={dbname}",
+                        "--format=custom",
+                        "--compress=9",
+                        "--verbose",
+                        "--no-owner",
+                        "--no-acl",
+                        f"--file={dump_path}"
+                    ]
+
+                    env = os.environ.copy()
+                    env["PGPASSWORD"] = password
+
+                    result = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=90)
+
+                    if result.returncode != 0:
+                        st.error(f"Backup failed:\n{result.stderr}")
+                    else:
+                        with open(dump_path, "rb") as f:
+                            st.download_button(
+                                label=f"Download Backup – {datetime.now().strftime('%Y-%m-%d')}.dump",
+                                data=f,
+                                file_name=f"sage-backup-{datetime.now().strftime('%Y-%m-%d')}.dump",
+                                mime="application/octet-stream",
+                                type="secondary",
+                                use_container_width=True
+                            )
+                        st.success("Backup ready!")
+            except Exception as e:
+                st.error(f"Error: {e}")
+            finally:
+                if 'dump_path' in locals() and os.path.exists(dump_path):
+                    os.unlink(dump_path)
+
+    st.markdown("#### Restore from Backup")
+    restore_file = st.file_uploader("Upload a .dump file", type=["dump"], key="restore")
+    if restore_file and st.button("Restore Database (OVERWRITES ALL)", type="secondary"):
+        if st.checkbox("I understand this will overwrite everything", key="confirm_restore"):
+            with st.spinner("Restoring..."):
+                try:
+                    with NamedTemporaryFile(delete=False) as tmpfile:
+                        tmpfile.write(restore_file.getvalue())
+                        restore_path = tmpfile.name
+
+                    cmd = [
+                        "pg_restore",
+                        "--clean", "--if-exists", "--no-owner", "--no-acl",
+                        f"--host={engine.url.host}",
+                        f"--port={engine.url.port or 5432}",
+                        f"--username={engine.url.username}",
+                        f"--dbname={engine.url.database}",
+                        restore_path
+                    ]
+                    env = os.environ.copy()
+                    env["PGPASSWORD"] = str(engine.url.password or "")
+                    result = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=180)
+                    if result.returncode == 0:
+                        st.success("Restore complete! Refreshing...")
+                        st.balloons()
+                    else:
+                        st.error(f"Restore failed:\n{result.stderr}")
+                except Exception as e:
+                    st.error(f"Error: {e}")
 
     st.markdown("---")
     st.subheader("Add Update")
@@ -462,14 +568,63 @@ if "ai_chat_session" not in st.session_state:
 
 # ------------------- AI CHAT PAGE -------------------
 if st.session_state.page == "ai":
-    # Your full AI chat — unchanged
-    st.subheader("S.A.G.E. | Strategy Session")
-    # ... (full AI code preserved)
+    st.subheader("S.A.G.E. | Strategic Asset Growth Engine")
+    st.caption("Let's review, refine, and grow — together.")
+
+    api_key = st.secrets.get("GOOGLE_API_KEY", "")
+    if not api_key:
+        st.warning("Add `GOOGLE_API_KEY` in Streamlit Secrets to enable S.A.G.E.")
+    else:
+        try:
+            genai.configure(api_key=api_key)
+            model = genai.GenerativeModel('gemini-1.5-flash', system_instruction=SYSTEM_PROMPT)
+            formatted_history = [
+                {"role": m["role"], "parts": [m["content"]]} 
+                for m in st.session_state.ai_messages 
+                if isinstance(m, dict)
+            ]
+            chat = model.start_chat(history=formatted_history) if not st.session_state.ai_chat_session else st.session_state.ai_chat_session
+            st.session_state.ai_chat_session = chat
+        except Exception as e:
+            st.error(f"AI init failed: {e}")
+            st.stop()
+
+        if not st.session_state.ai_messages and not df_port.empty:
+            metrics = {}  # Simplified for now
+            init_prompt = f"Net worth: ${df_net['value'].iloc[-1]:,.0f}\nPortfolio loaded."
+            with st.spinner("S.A.G.E. is thinking..."):
+                response = chat.send_message(init_prompt)
+                reply = response.text
+            st.session_state.ai_messages.append({"role": "user", "content": init_prompt})
+            save_ai_message("user", init_prompt)
+            st.session_state.ai_messages.append({"role": "model", "content": reply})
+            save_ai_message("model", reply)
+            st.rerun()
+
+        for msg in st.session_state.ai_messages:
+            role = "assistant" if msg["role"] == "model" else "user"
+            with st.chat_message(role):
+                st.markdown(msg["content"])
+
+        user_input = st.chat_input("Ask S.A.G.E. anything...")
+        if user_input:
+            st.session_state.ai_messages.append({"role": "user", "content": user_input})
+            save_ai_message("user", user_input)
+            with st.spinner("S.A.G.E. is thinking..."):
+                response = chat.send_message(user_input)
+                reply = response.text
+            st.session_state.ai_messages.append({"role": "model", "content": reply})
+            save_ai_message("model", reply)
+            st.rerun()
+
+    if st.button("Back to Dashboard"):
+        st.session_state.page = "home"
+        st.rerun()
 
 # ------------------- HOME DASHBOARD -------------------
 else:
     if df.empty:
-        st.info("Upload your Fidelity CSV and add a monthly update. S.A.G.E. is ready when you are.")
+        st.info("Add your first monthly update to begin.")
         st.stop()
 
     tab1, tab2 = st.tabs(["Family Progress", "Goals & Projections"])
@@ -481,35 +636,30 @@ else:
 
         fig = go.Figure()
         colors = {"Sean": "#636EFA", "Kim": "#EF553B", "Taylor": "#00CC96", "Sean + Kim": "#AB63FA"}
-        width = {"Sean + Kim": 5, "Sean": 3, "Kim": 3, "Taylor": 3}
-
         for person in ["Sean", "Kim", "Taylor", "Sean + Kim"]:
             if person in df_pivot.columns:
                 fig.add_trace(go.Scatter(
                     x=df_pivot.index,
                     y=df_pivot[person],
                     name=person,
-                    line=dict(color=colors[person], width=width.get(person, 3)),
+                    line=dict(color=colors[person], width=5 if "Sean + Kim" in person else 3),
                     hovertemplate=f"<b>{person}</b><br>%{{x|%b %Y}}: $%{{y:,.0f}}<extra></extra>"
                 ))
 
         fig.update_layout(
             title="Our Family Wealth Journey",
-            xaxis_title="Date",
-            yaxis_title="Total Value ($)",
-            hovermode="x unified",
             height=600,
+            hovermode="x unified",
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
         )
         st.plotly_chart(fig, use_container_width=True)
 
         st.markdown("##### Month-over-Month Change ($)")
-        mom = df_pivot.diff().round(0)
-        st.dataframe(mom.tail(24).style.format("${:,.0f}"), use_container_width=True)
+        st.dataframe(df_pivot.diff().tail(24).style.format("${:,.0f}"), use_container_width=True)
 
     with tab2:
         st.subheader("Goals")
-        cur = df_net["value"].iloc[-1]
+        cur = df_net["value"].iloc[-1] if not df_net.empty else 0
         goals = get_goals()
         if goals:
             for g in goals:
@@ -518,17 +668,22 @@ else:
                 st.progress(prog)
                 st.write(f"**{g.name}** • ${cur:,.0f} / ${g.target:,.0f} by {g.by_year} ({years_left:+} years)")
         else:
-            st.info("No goals set yet – add one in the sidebar!")
+            st.info("No goals yet — add one in the sidebar!")
 
         st.subheader("Growth Projections")
-        horizon = st.slider("Projection horizon (months)", 12, 120, 36)
+        horizon = st.slider("Months ahead", 12, 120, 36)
         arima_f, _, _, lr_f, rf_f = ai_projections(df_net, horizon)
-
         if arima_f is not None:
-            future_dates = pd.date_range(df_net["date"].max() + pd.DateOffset(months=1), periods=horizon, freq='ME')
-            fig_proj = go.Figure()
-            fig_proj.add_trace(go.Scatter(x=df_net["date"], y=df_net["value"], name="Historical", line=dict(color="#AB63FA")))
-            fig_proj.add_trace(go.Scatter(x=future_dates, y=arima_f, name="ARIMA Forecast", line=dict(dash="dot")))
-            fig_proj.add_trace(go.Scatter(x=future_dates, y=lr_f, name="Linear Trend", line=dict(dash="dash")))
-            fig_proj.update_layout(title=f"Where we're headed (next {horizon} months)", height=500)
-            st.plotly_chart(fig_proj,
+            future = pd.date_range(df_net["date"].max() + pd.DateOffset(months=1), periods=horizon, freq='ME')
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=df_net["date"], y=df_net["value"], name="Historical", line=dict(color="#AB63FA")))
+            fig.add_trace(go.Scatter(x=future, y=arima_f, name="Forecast", line=dict(dash="dot")))
+            fig.update_layout(title=f"Projected Net Worth – Next {horizon} Months", height=500)
+            st.plotly_chart(fig, use_container_width=True)
+
+    st.download_button(
+        "Export All Monthly Data",
+        df.to_csv(index=False).encode(),
+        f"sage-data-{datetime.now().strftime('%Y-%m-%d')}.csv",
+        "text/csv"
+    )
