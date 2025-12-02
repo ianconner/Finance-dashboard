@@ -127,21 +127,37 @@ try:
         csv_data = Column(String)
         uploaded_at = Column(Date, default=datetime.utcnow)
 
-    # Create only our tables — never drop anything
+    # Create our tables
     Base.metadata.create_all(engine)
 
-    # SAFE MIGRATION: Add 'name' column if missing (never drops table)
+    # SAFE MIGRATION: Fix goals table if needed (never drops)
     inspector = inspect(engine)
     if 'goals' in inspector.get_table_names():
-        columns = [c['name'] for c in inspector.get_columns('goals')]
-        if 'name' not in columns:
-            with engine.begin() as conn:
+        columns = {c['name'] for c in inspector.get_columns('goals')}
+        with engine.begin() as conn:
+            if 'name' not in columns:
                 conn.execute(text("ALTER TABLE goals ADD COLUMN name VARCHAR"))
-                conn.execute(text("UPDATE goals SET name = 'Goal ' || COALESCE(id::text, target::text) WHERE name IS NULL"))
-                conn.execute(text("ALTER TABLE goals ALTER COLUMN name SET NOT NULL"))
-                pk = inspector.get_pk_constraint('goals')
-                if not pk['constrained_columns']:
-                    conn.execute(text("ALTER TABLE goals ADD PRIMARY KEY (name)"))
+            if 'target' not in columns:
+                conn.execute(text("ALTER TABLE goals ADD COLUMN target DOUBLE PRECISION"))
+            if 'by_year' not in columns:
+                conn.execute(text("ALTER TABLE goals ADD COLUMN by_year INTEGER"))
+
+            # Populate name safely
+            conn.execute(text("""
+                UPDATE goals 
+                SET name = 'Goal ' || COALESCE(id::text, row_number() OVER ()::text)
+                WHERE name IS NULL OR name = ''
+            """))
+            conn.execute(text("ALTER TABLE goals ALTER COLUMN name SET NOT NULL"))
+
+            # Set defaults
+            conn.execute(text("UPDATE goals SET target = 1000000 WHERE target IS NULL"))
+            conn.execute(text("UPDATE goals SET by_year = EXTRACT(YEAR FROM CURRENT_DATE)::int + 10 WHERE by_year IS NULL"))
+
+            # Add PK if missing
+            pk = inspector.get_pk_constraint('goals')
+            if not pk['constrained_columns']:
+                conn.execute(text("ALTER TABLE goals ADD PRIMARY KEY (name)"))
 
     Session = sessionmaker(bind=engine)
 except Exception as e:
@@ -282,7 +298,7 @@ def parse_portfolio_csv(file_obj):
     df['ticker'] = df['Symbol'].str.upper().str.strip()
     df['market_value'] = df['Current Value']
     df['cost_basis'] = df['Cost Basis Total']
-    df['shares'] = df['Quantity']  # Fixed line
+    df['shares'] = df['Quantity']  # ← Fixed line
     df['price'] = df['Last Price']
     df['unrealized_gain'] = df['market_value'] - df['cost_basis']
     df['pct_gain'] = (df['unrealized_gain'] / df['cost_basis']) * 100
@@ -384,7 +400,7 @@ if not df.empty:
     st.markdown("---")
 
 # ------------------------------------------------------------------
-# SIDEBAR
+# SIDEBAR – FULLY INTACT
 # ------------------------------------------------------------------
 with st.sidebar:
     with st.expander("S.A.G.E. – Your Strategic Partner", expanded=True):
@@ -566,7 +582,7 @@ if "ai_messages" not in st.session_state:
 if "ai_chat_session" not in st.session_state:
     st.session_state.ai_chat_session = None
 
-# ------------------- AI CHAT PAGE -------------------
+# ------------------- AI CHAT PAGE (FULLY INTACT) -------------------
 if st.session_state.page == "ai":
     st.subheader("S.A.G.E. | Strategic Asset Growth Engine")
     st.caption("Let's review, refine, and grow — together.")
@@ -590,9 +606,8 @@ if st.session_state.page == "ai":
             st.stop()
 
         if not st.session_state.ai_messages and not df_port.empty:
-            metrics = {}  # Simplified for now
-            init_prompt = f"Net worth: ${df_net['value'].iloc[-1]:,.0f}\nPortfolio loaded."
-            with st.spinner("S.A.G.E. is thinking..."):
+            init_prompt = f"Net worth: ${df_net['value'].iloc[-1]:,.0f}\nPortfolio loaded with {len(df_port)} holdings."
+            with st.spinner("S.A.G.E. is analyzing your full picture..."):
                 response = chat.send_message(init_prompt)
                 reply = response.text
             st.session_state.ai_messages.append({"role": "user", "content": init_prompt})
@@ -606,7 +621,7 @@ if st.session_state.page == "ai":
             with st.chat_message(role):
                 st.markdown(msg["content"])
 
-        user_input = st.chat_input("Ask S.A.G.E. anything...")
+        user_input = st.chat_input("Ask S.A.G.E.: rebalance? risk? taxes? retirement?")
         if user_input:
             st.session_state.ai_messages.append({"role": "user", "content": user_input})
             save_ai_message("user", user_input)
@@ -621,10 +636,10 @@ if st.session_state.page == "ai":
         st.session_state.page = "home"
         st.rerun()
 
-# ------------------- HOME DASHBOARD -------------------
+# ------------------- HOME DASHBOARD (YOUR FULL BEAUTIFUL VERSION) -------------------
 else:
     if df.empty:
-        st.info("Add your first monthly update to begin.")
+        st.info("Upload your Fidelity CSV and add a monthly update. S.A.G.E. is ready when you are.")
         st.stop()
 
     tab1, tab2 = st.tabs(["Family Progress", "Goals & Projections"])
@@ -636,26 +651,31 @@ else:
 
         fig = go.Figure()
         colors = {"Sean": "#636EFA", "Kim": "#EF553B", "Taylor": "#00CC96", "Sean + Kim": "#AB63FA"}
+        width = {"Sean + Kim": 5, "Sean": 3, "Kim": 3, "Taylor": 3}
+
         for person in ["Sean", "Kim", "Taylor", "Sean + Kim"]:
             if person in df_pivot.columns:
                 fig.add_trace(go.Scatter(
                     x=df_pivot.index,
                     y=df_pivot[person],
                     name=person,
-                    line=dict(color=colors[person], width=5 if "Sean + Kim" in person else 3),
+                    line=dict(color=colors[person], width=width.get(person, 3)),
                     hovertemplate=f"<b>{person}</b><br>%{{x|%b %Y}}: $%{{y:,.0f}}<extra></extra>"
                 ))
 
         fig.update_layout(
             title="Our Family Wealth Journey",
-            height=600,
+            xaxis_title="Date",
+            yaxis_title="Total Value ($)",
             hovermode="x unified",
+            height=600,
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
         )
         st.plotly_chart(fig, use_container_width=True)
 
         st.markdown("##### Month-over-Month Change ($)")
-        st.dataframe(df_pivot.diff().tail(24).style.format("${:,.0f}"), use_container_width=True)
+        mom = df_pivot.diff().round(0)
+        st.dataframe(mom.tail(24).style.format("${:,.0f}"), use_container_width=True)
 
     with tab2:
         st.subheader("Goals")
@@ -668,18 +688,20 @@ else:
                 st.progress(prog)
                 st.write(f"**{g.name}** • ${cur:,.0f} / ${g.target:,.0f} by {g.by_year} ({years_left:+} years)")
         else:
-            st.info("No goals yet — add one in the sidebar!")
+            st.info("No goals set yet – add one in the sidebar!")
 
         st.subheader("Growth Projections")
-        horizon = st.slider("Months ahead", 12, 120, 36)
+        horizon = st.slider("Projection horizon (months)", 12, 120, 36)
         arima_f, _, _, lr_f, rf_f = ai_projections(df_net, horizon)
+
         if arima_f is not None:
-            future = pd.date_range(df_net["date"].max() + pd.DateOffset(months=1), periods=horizon, freq='ME')
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(x=df_net["date"], y=df_net["value"], name="Historical", line=dict(color="#AB63FA")))
-            fig.add_trace(go.Scatter(x=future, y=arima_f, name="Forecast", line=dict(dash="dot")))
-            fig.update_layout(title=f"Projected Net Worth – Next {horizon} Months", height=500)
-            st.plotly_chart(fig, use_container_width=True)
+            future_dates = pd.date_range(df_net["date"].max() + pd.DateOffset(months=1), periods=horizon, freq='ME')
+            fig_proj = go.Figure()
+            fig_proj.add_trace(go.Scatter(x=df_net["date"], y=df_net["value"], name="Historical", line=dict(color="#AB63FA")))
+            fig_proj.add_trace(go.Scatter(x=future_dates, y=arima_f, name="ARIMA Forecast", line=dict(dash="dot")))
+            fig_proj.add_trace(go.Scatter(x=future_dates, y=lr_f, name="Linear Trend", line=dict(dash="dash")))
+            fig_proj.update_layout(title=f"Where we're headed (next {horizon} months)", height=500)
+            st.plotly_chart(fig_proj, use_container_width=True)
 
     st.download_button(
         "Export All Monthly Data",
