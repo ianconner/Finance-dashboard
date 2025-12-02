@@ -142,13 +142,18 @@ try:
             if 'by_year' not in columns:
                 conn.execute(text("ALTER TABLE goals ADD COLUMN by_year INTEGER"))
 
-            # Populate name safely
+              # Populate name safely using a CTE
             conn.execute(text("""
-                UPDATE goals 
-                SET name = 'Goal ' || COALESCE(id::text, row_number() OVER ()::text)
-                WHERE name IS NULL OR name = ''
+                WITH numbered_goals AS (
+                    SELECT ctid, row_number() OVER () as rn
+                    FROM goals
+                    WHERE name IS NULL OR name = ''
+                )
+                UPDATE goals
+                SET name = 'Goal ' || numbered_goals.rn::text
+                FROM numbered_goals
+                WHERE goals.ctid = numbered_goals.ctid
             """))
-            conn.execute(text("ALTER TABLE goals ALTER COLUMN name SET NOT NULL"))
 
             # Set defaults
             conn.execute(text("UPDATE goals SET target = 1000000 WHERE target IS NULL"))
