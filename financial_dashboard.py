@@ -609,6 +609,25 @@ def calculate_confidence_score(df_net, target_amount, target_year=2042):
         confidence = max(5, confidence - volatility_adjustment)
     
     return round(confidence, 1), method
+# --------------------------- UI ---------------------------------------
+st.set_page_config(page_title="S.A.G.E. | Strategic Asset Growth Engine", layout="wide")
+st.title("S.A.G.E. | Strategic Asset Growth Engine")
+st.caption("Your co-pilot in building generational wealth – together.")
+
+# Load data
+df = get_monthly_updates()
+df["date"] = pd.to_datetime(df["date"])
+df_net = pd.DataFrame()
+
+if not df.empty:
+    df_net = (
+        df[df["person"].isin(["Sean", "Kim"])]
+        .groupby("date")["value"].sum()
+        .reset_index()
+        .sort_values("date")
+    )
+    df_net["date"] = df_net["date"].dt.tz_localize(None)
+
 # ------------------------------------------------------------------
 # --------------------- TOP RETIREMENT GOAL -------------------------
 # ------------------------------------------------------------------
@@ -668,94 +687,6 @@ if not df.empty:
     if new_target != retirement_target:
         set_retirement_goal(new_target)
         st.rerun()
-    
-    st.markdown("---")
-    
-    # PROJECTION CONE GRAPH
-    st.markdown("## 📊 Projection Cone: Sept 2020 → Dec 2042")
-    future_dates, conservative, current_pace, optimistic = calculate_projection_cone(df_net, retirement_target, 2042)
-    
-    if future_dates is not None:
-        fig_cone = go.Figure()
-        
-        # Historical data (Sean + Kim)
-        fig_cone.add_trace(go.Scatter(
-            x=df_net['date'],
-            y=df_net['value'],
-            name='Historical (Sean + Kim)',
-            line=dict(color='#AB63FA', width=4),
-            mode='lines'
-        ))
-        
-        # Conservative projection (S&P 500)
-        fig_cone.add_trace(go.Scatter(
-            x=future_dates,
-            y=conservative,
-            name='Conservative (S&P 7%)',
-            line=dict(color='#FFA15A', width=2, dash='dot'),
-            mode='lines'
-        ))
-        
-        # Current pace projection
-        fig_cone.add_trace(go.Scatter(
-            x=future_dates,
-            y=current_pace,
-            name='Current Pace',
-            line=dict(color='#00CC96', width=3),
-            mode='lines'
-        ))
-        
-        # Optimistic projection
-        fig_cone.add_trace(go.Scatter(
-            x=future_dates,
-            y=optimistic,
-            name='Optimistic (1.5x Target)',
-            line=dict(color='#636EFA', width=2, dash='dash'),
-            mode='lines'
-        ))
-        
-        # Add target line at 2042
-        fig_cone.add_hline(
-            y=retirement_target,
-            line_dash="dash",
-            line_color="red",
-            annotation_text=f"Target: ${retirement_target:,.0f}",
-            annotation_position="right"
-        )
-        
-        # Add shaded confidence interval
-        fig_cone.add_trace(go.Scatter(
-            x=list(future_dates) + list(future_dates[::-1]),
-            y=conservative + optimistic[::-1],
-            fill='toself',
-            fillcolor='rgba(0,100,250,0.1)',
-            line=dict(color='rgba(255,255,255,0)'),
-            showlegend=False,
-            name='Confidence Range'
-        ))
-        
-        fig_cone.update_layout(
-            title=f"Retirement Projection Cone • {confidence:.0f}% Confidence",
-            xaxis_title="Date",
-            yaxis_title="Net Worth ($)",
-            hovermode="x unified",
-            height=600,
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
-        )
-        
-        st.plotly_chart(fig_cone, use_container_width=True)
-        
-        # Projection summary
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("Conservative (2042)", f"${conservative[-1]:,.0f}", 
-                     delta=f"{((conservative[-1]/retirement_target - 1) * 100):+.0f}% vs target")
-        with col2:
-            st.metric("Current Pace (2042)", f"${current_pace[-1]:,.0f}",
-                     delta=f"{((current_pace[-1]/retirement_target - 1) * 100):+.0f}% vs target")
-        with col3:
-            st.metric("Optimistic (2042)", f"${optimistic[-1]:,.0f}",
-                     delta=f"{((optimistic[-1]/retirement_target - 1) * 100):+.0f}% vs target")
     
     st.markdown("---")
 # ------------------------------------------------------------------
