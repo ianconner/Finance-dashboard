@@ -426,6 +426,115 @@ def ai_projections(df_net, horizon=24):
 
     return forecast, lower, upper, lr_pred, rf_pred
 # ----------------------------------------------------------------------
+# ----------------------- PROJECTION CONE ------------------------------
+# ----------------------------------------------------------------------
+def calculate_projection_cone(df_net, target_amount, target_year=2042):
+    """
+    Calculate 3 projection lines to retirement:
+    1. Conservative (S&P 500 historical: 7% annual)
+    2. Current Pace (your actual YoY growth rate)
+    3. Optimistic (what you need to exceed goal)
+    """
+    if df_net.empty or len(df_net) < 2:
+        return None, None, None, None
+    
+    current_value = df_net['value'].iloc[-1]
+    current_date = df_net['date'].iloc[-1]
+    
+    # Calculate months to retirement
+    months_to_retirement = (target_year - current_date.year) * 12 - current_date.month
+    if months_to_retirement <= 0:
+        return None, None, None, None
+    
+    # Generate future dates (monthly)
+    future_dates = pd.date_range(
+        start=current_date + pd.DateOffset(months=1),
+        periods=months_to_retirement,
+        freq='ME'
+    )
+    
+    # 1. CONSERVATIVE: S&P 500 baseline (7% annual = 0.5654% monthly)
+    sp500_monthly_rate = 0.07 / 12
+    conservative = [current_value * ((1 + sp500_monthly_rate) ** (i + 1)) for i in range(months_to_retirement)]
+    
+    # 2. CURRENT PACE: Calculate actual YoY growth rate using quarterly snapshots
+    quarterly_months = [1, 4, 7, 10]  # Jan, Apr, Jul, Oct
+    quarterly_data = df_net[df_net['date'].dt.month.isin(quarterly_months)].copy()
+    
+    if len(quarterly_data) >= 2:
+        # Calculate YoY growth for each quarter
+        quarterly_data = quarterly_data.sort_values('date')
+        quarterly_data['yoy_growth'] = quarterly_data['value'].pct_change(periods=4)  # 4 quarters = 1 year
+        
+        # Use median YoY growth to smooth outliers
+        avg_yoy_growth = quarterly_data['yoy_growth'].dropna().median()
+        
+        if pd.notna(avg_yoy_growth) and avg_yoy_growth > -0.5:  # Sanity check
+            monthly_growth_rate = (1 + avg_yoy_growth) ** (1/12) - 1
+        else:
+            monthly_growth_rate = sp500_monthly_rate  # Fallback to S&P
+    else:
+        monthly_growth_rate = sp500_monthly_rate
+    
+    current_pace = [current_value * ((1 + monthly_growth_rate) ** (i + 1)) for i in range(months_to_retirement)]
+    
+    # 3. OPTIMISTIC: What rate do we need to hit 2x target?
+    optimistic_target = target_amount * 1.5
+    required_monthly_rate = (optimistic_target / current_value) ** (1 / months_to_retirement) - 1
+    optimistic = [current_value * ((1 + required_monthly_rate) ** (i + 1)) for i in range(months_to_retirement)]
+    
+    return future_dates, conservative, current_pace, optimistic
+
+def calculate_confidence_score(df_net, target_amount, target_year=2042):
+    """
+    Calculate probability of hitting retirement goal based on:
+    - Current value vs target
+    - Historical volatility
+    - Time remaining
+    """
+    if df_net.empty or len(df_net) < 2:
+        return 50.0, "Insufficient data"
+    
+    current_value = df_net['value'].iloc[-1]
+    current_date = df_net['date'].iloc[-1]
+    months_remaining = (target_year - current_date.year) * 12 - current_date.month
+    
+    if months_remaining <= 0:
+        return 100.0 if current_value >= target_amount else 0.0, "At retirement date"
+    
+    # Calculate historical monthly returns
+    df_sorted = df_net.sort_values('date')
+    df_sorted['monthly_return'] = df_sorted['value'].pct_change()
+    
+    # Get mean and std dev of returns
+    mean_return = df_sorted['monthly_return'].mean()
+    std_return = df_sorted['monthly_return'].std()
+    
+    if pd.isna(mean_return) or pd.isna(std_return) or std_return == 0:
+        # Simple linear projection if we can't calculate volatility
+        needed_growth = (target_amount - current_value) / current_value
+        if needed_growth <= 0:
+            return 95.0, "Already at/above target"
+        else:
+            progress_pct = (current_value / target_amount) * 100
+            return min(95, max(20, progress_pct)), "Linear projection"
+    
+    # Monte Carlo-style probability
+    # Calculate required monthly return to hit target
+    required_return = (target_amount / current_value) ** (1 / months_remaining) - 1
+    
+    # Z-score: how many standard deviations away is required return from mean?
+    z_score = (required_return - mean_return) / std_return
+    
+    # Convert to probability (normal distribution approximation)
+    from scipy.stats import norm
+    probability = norm.cdf(-z_score) * 100  # Probability of exceeding required return
+    
+    # Cap between 5% and 95% for realism
+    confidence = min(95, max(5, probability))
+    
+    return round(confidence, 1), "Statistical projection"
+# ----------------------------------------------------------------------
 # --------------------------- UI ---------------------------------------
 # ----------------------------------------------------------------------
 st.set_page_config(page_title="S.A.G.E. | Strategic Asset Growth Engine", layout="wide")
@@ -445,7 +554,6 @@ if not df.empty:
         .sort_values("date")
     )
     df_net["date"] = df_net["date"].dt.tz_localize(None)
-
 # ------------------------------------------------------------------
 # --------------------- TOP RETIREMENT GOAL -------------------------
 # ------------------------------------------------------------------
@@ -455,22 +563,39 @@ if not df.empty:
     progress_pct = (cur_total / retirement_target) * 100
     years_remaining = 2042 - datetime.now().year
     
+    # Calculate confidence score
+    confidence, confidence_method = calculate_confidence_score(df_net, retirement_target, 2042)
+    
     st.markdown("# 🎯 RETIREMENT 2042")
     
-    col1, col2, col3 = st.columns([2, 1, 1])
+    col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
     with col1:
         st.metric("Current Net Worth (Sean + Kim)", f"${cur_total:,.0f}")
     with col2:
         st.metric("Target", f"${retirement_target:,.0f}")
     with col3:
         st.metric("Progress", f"{progress_pct:.1f}%")
+    with col4:
+        # Color code confidence
+        if confidence >= 80:
+            st.metric("Confidence", f"{confidence:.0f}%", delta="On track", delta_color="normal")
+        elif confidence >= 60:
+            st.metric("Confidence", f"{confidence:.0f}%", delta="Monitor", delta_color="off")
+        else:
+            st.metric("Confidence", f"{confidence:.0f}%", delta="Action needed", delta_color="inverse")
     
     # Progress bar with color coding
     if progress_pct >= 100:
         st.success(f"🎉 Goal achieved! You're at {progress_pct:.1f}% of target!")
+    elif confidence >= 80:
+        st.progress(min(progress_pct / 100, 1.0))
+        st.success(f"✅ On track! {years_remaining} years remaining • {confidence:.0f}% confidence")
+    elif confidence >= 60:
+        st.progress(min(progress_pct / 100, 1.0))
+        st.warning(f"⚠️ Watch closely • {years_remaining} years remaining • {confidence:.0f}% confidence")
     else:
         st.progress(min(progress_pct / 100, 1.0))
-        st.info(f"📅 {years_remaining} years remaining until retirement")
+        st.error(f"🚨 Adjustment needed • {years_remaining} years remaining • {confidence:.0f}% confidence")
     
     # Goal adjustment slider
     st.markdown("#### Adjust Retirement Goal")
@@ -490,7 +615,94 @@ if not df.empty:
         st.rerun()
     
     st.markdown("---")
-
+    
+    # PROJECTION CONE GRAPH
+    st.markdown("## 📊 Projection Cone: Sept 2020 → Dec 2042")
+    future_dates, conservative, current_pace, optimistic = calculate_projection_cone(df_net, retirement_target, 2042)
+    
+    if future_dates is not None:
+        fig_cone = go.Figure()
+        
+        # Historical data (Sean + Kim)
+        fig_cone.add_trace(go.Scatter(
+            x=df_net['date'],
+            y=df_net['value'],
+            name='Historical (Sean + Kim)',
+            line=dict(color='#AB63FA', width=4),
+            mode='lines'
+        ))
+        
+        # Conservative projection (S&P 500)
+        fig_cone.add_trace(go.Scatter(
+            x=future_dates,
+            y=conservative,
+            name='Conservative (S&P 7%)',
+            line=dict(color='#FFA15A', width=2, dash='dot'),
+            mode='lines'
+        ))
+        
+        # Current pace projection
+        fig_cone.add_trace(go.Scatter(
+            x=future_dates,
+            y=current_pace,
+            name='Current Pace',
+            line=dict(color='#00CC96', width=3),
+            mode='lines'
+        ))
+        
+        # Optimistic projection
+        fig_cone.add_trace(go.Scatter(
+            x=future_dates,
+            y=optimistic,
+            name='Optimistic (1.5x Target)',
+            line=dict(color='#636EFA', width=2, dash='dash'),
+            mode='lines'
+        ))
+        
+        # Add target line at 2042
+        fig_cone.add_hline(
+            y=retirement_target,
+            line_dash="dash",
+            line_color="red",
+            annotation_text=f"Target: ${retirement_target:,.0f}",
+            annotation_position="right"
+        )
+        
+        # Add shaded confidence interval
+        fig_cone.add_trace(go.Scatter(
+            x=list(future_dates) + list(future_dates[::-1]),
+            y=conservative + optimistic[::-1],
+            fill='toself',
+            fillcolor='rgba(0,100,250,0.1)',
+            line=dict(color='rgba(255,255,255,0)'),
+            showlegend=False,
+            name='Confidence Range'
+        ))
+        
+        fig_cone.update_layout(
+            title=f"Retirement Projection Cone • {confidence:.0f}% Confidence",
+            xaxis_title="Date",
+            yaxis_title="Net Worth ($)",
+            hovermode="x unified",
+            height=600,
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+        )
+        
+        st.plotly_chart(fig_cone, use_container_width=True)
+        
+        # Projection summary
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Conservative (2042)", f"${conservative[-1]:,.0f}", 
+                     delta=f"{((conservative[-1]/retirement_target - 1) * 100):+.0f}% vs target")
+        with col2:
+            st.metric("Current Pace (2042)", f"${current_pace[-1]:,.0f}",
+                     delta=f"{((current_pace[-1]/retirement_target - 1) * 100):+.0f}% vs target")
+        with col3:
+            st.metric("Optimistic (2042)", f"${optimistic[-1]:,.0f}",
+                     delta=f"{((optimistic[-1]/retirement_target - 1) * 100):+.0f}% vs target")
+    
+    st.markdown("---")
 # ------------------------------------------------------------------
 # --------------------- TOP SUMMARY + YTD ---------------------------
 # ------------------------------------------------------------------
@@ -823,9 +1035,116 @@ else:
         )
         st.plotly_chart(fig, use_container_width=True)
 
-        st.markdown("##### Month-over-Month Change ($)")
-        mom = df_pivot.diff().round(0)
-        st.dataframe(mom.tail(24).style.format("${:,.0f}"), use_container_width=True)
+        st.markdown("---")
+        st.markdown("## 📈 Month-over-Month Analysis")
+        
+        # Calculate MoM changes ($ and %)
+        mom_dollar = df_pivot.diff().round(0)
+        mom_pct = df_pivot.pct_change() * 100
+        
+        # Get available years
+        available_years = sorted(df_pivot.index.year.unique(), reverse=True)
+        
+        # Create tabs for each year
+        year_tabs = st.tabs([str(year) for year in available_years])
+        
+        for year_tab, year in zip(year_tabs, available_years):
+            with year_tab:
+                # Filter data for this year
+                year_mask = df_pivot.index.year == year
+                year_data_dollar = mom_dollar[year_mask]
+                year_data_pct = mom_pct[year_mask]
+                
+                if year_data_dollar.empty:
+                    st.info(f"No data for {year}")
+                    continue
+                
+                # Build display DataFrame
+                display_data = []
+                for date in year_data_dollar.index:
+                    row = {'Date': date.strftime('%b %Y')}
+                    
+                    for person in ['Sean', 'Kim', 'Taylor', 'Sean + Kim']:
+                        if person in year_data_dollar.columns:
+                            dollar_val = year_data_dollar.loc[date, person]
+                            pct_val = year_data_pct.loc[date, person]
+                            
+                            if pd.notna(dollar_val) and pd.notna(pct_val):
+                                row[f'{person} $'] = dollar_val
+                                row[f'{person} %'] = pct_val
+                            else:
+                                row[f'{person} $'] = 0
+                                row[f'{person} %'] = 0
+                    
+                    display_data.append(row)
+                
+                df_display = pd.DataFrame(display_data)
+                
+                # Style function for color coding
+                def color_negative_red(val):
+                    if isinstance(val, (int, float)):
+                        color = '#90EE90' if val > 0 else ('#FF6B6B' if val < 0 else 'white')
+                        return f'background-color: {color}; color: black'
+                    return ''
+                
+                # Apply styling
+                styled_df = df_display.style.applymap(
+                    color_negative_red,
+                    subset=[col for col in df_display.columns if col != 'Date']
+                ).format({
+                    col: '${:,.0f}' if '$' in col else '{:+.2f}%'
+                    for col in df_display.columns if col != 'Date'
+                })
+                
+                st.dataframe(styled_df, use_container_width=True, height=400)
+        
+        st.markdown("---")
+        st.markdown("## 📅 Year-over-Year (December to December)")
+        
+        # Get December data for each year
+        december_data = df_pivot[df_pivot.index.month == 12].copy()
+        
+        if len(december_data) >= 2:
+            yoy_data = []
+            years = sorted(december_data.index.year.unique())
+            
+            for i in range(len(years) - 1):
+                prev_year = years[i]
+                curr_year = years[i + 1]
+                
+                prev_data = december_data[december_data.index.year == prev_year].iloc[0]
+                curr_data = december_data[december_data.index.year == curr_year].iloc[0]
+                
+                row = {'Period': f'Dec {prev_year} → Dec {curr_year}'}
+                
+                for person in ['Sean', 'Kim', 'Taylor', 'Sean + Kim']:
+                    if person in prev_data.index and person in curr_data.index:
+                        prev_val = prev_data[person]
+                        curr_val = curr_data[person]
+                        
+                        if prev_val > 0:
+                            dollar_change = curr_val - prev_val
+                            pct_change = ((curr_val / prev_val) - 1) * 100
+                            
+                            row[f'{person} $'] = dollar_change
+                            row[f'{person} %'] = pct_change
+                
+                yoy_data.append(row)
+            
+            df_yoy = pd.DataFrame(yoy_data)
+            
+            # Style YoY data
+            styled_yoy = df_yoy.style.applymap(
+                color_negative_red,
+                subset=[col for col in df_yoy.columns if col != 'Period']
+            ).format({
+                col: '${:,.0f}' if '$' in col else '{:+.2f}%'
+                for col in df_yoy.columns if col != 'Period'
+            })
+            
+            st.dataframe(styled_yoy, use_container_width=True)
+        else:
+            st.info("Need at least 2 years of December data for YoY comparison")
 
     with tab2:
         st.subheader("Retirement Goal Progress")
