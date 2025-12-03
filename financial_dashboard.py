@@ -1172,7 +1172,7 @@ with tab1:
         else:
             st.info("Need at least 2 years of December data for YoY comparison")
 
-    with tab2:
+with tab2:
         st.markdown("# 💎 Taylor's Nest Egg")
         st.caption("Building long-term wealth for Taylor's future")
         
