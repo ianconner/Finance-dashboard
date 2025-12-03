@@ -978,29 +978,60 @@ if st.session_state.page == "ai":
             st.error(f"AI init failed: {e}")
             st.stop()
 
-        if not st.session_state.ai_messages and not df_port.empty:
+        # Check if we need to generate a fresh analysis
+        should_analyze = False
+        
+        # Trigger analysis if: no messages yet, or user just uploaded portfolio
+        if not st.session_state.ai_messages:
+            should_analyze = True
+        elif not df_port.empty:
+            # Check if last message is old or doesn't contain current data
+            if st.session_state.ai_messages:
+                last_msg = st.session_state.ai_messages[-1]
+                # If last message is more than 1 day old, re-analyze
+                if 'timestamp' not in last_msg or (datetime.now() - datetime.fromisoformat(str(last_msg.get('timestamp', datetime.now())))).days >= 1:
+                    should_analyze = True
+        
+        if should_analyze and not df_port.empty:
             retirement_target = get_retirement_goal()
             years_to_retirement = 2042 - datetime.now().year
-            init_prompt = f"""Here's our current situation:
             
-**Retirement Goal**: ${retirement_target:,.0f} by 2042 ({years_to_retirement} years remaining)
-**Current Net Worth (Sean + Kim)**: ${df_net['value'].iloc[-1]:,.0f}
-**Progress**: {(df_net['value'].iloc[-1] / retirement_target) * 100:.1f}%
+            # Calculate current pace projection
+            future_dates, conservative, current_pace, optimistic = calculate_projection_cone(df_net, retirement_target, 2042)
+            projected_2042 = current_pace[-1] if current_pace is not None else 0
+            confidence, conf_method = calculate_confidence_score(df_net, retirement_target, 2042)
+            
+            init_prompt = f"""Here's our current situation (as of {datetime.now().strftime('%B %d, %Y')}):
 
-**Portfolio**: Loaded {len(df_port)} holdings from Fidelity
-**Total Portfolio Value**: ${port_summary.get('total_value', 0):,.0f}
-**Total Gain**: ${port_summary.get('total_gain', 0):,.0f} ({port_summary.get('total_gain_pct', 0):.1f}%)
+**RETIREMENT GOAL**: ${retirement_target:,.0f} by 2042 ({years_to_retirement} years remaining)
 
-What's your initial analysis? Are we on track?"""
+**CURRENT STATUS**:
+- Net Worth (Sean + Kim): ${df_net['value'].iloc[-1]:,.0f}
+- Progress: {(df_net['value'].iloc[-1] / retirement_target) * 100:.1f}%
+- Confidence Score: {confidence:.0f}% ({conf_method})
+
+**PROJECTIONS TO 2042**:
+- Conservative (S&P 7%): ${conservative[-1]:,.0f}
+- Current Pace: ${projected_2042:,.0f}
+- Optimistic (1.5x): ${optimistic[-1]:,.0f}
+
+**PORTFOLIO SNAPSHOT**:
+- Holdings: {len(df_port)} positions
+- Total Value: ${port_summary.get('total_value', 0):,.0f}
+- Total Gain: ${port_summary.get('total_gain', 0):,.0f} ({port_summary.get('total_gain_pct', 0):.1f}%)
+- Top Holding: {port_summary.get('top_holding', 'N/A')} ({port_summary.get('top_allocation', 0):.1f}% of portfolio)
+
+Give me your analysis: Are we on track? Any red flags? What should we focus on?"""
+            
             with st.spinner("S.A.G.E. is analyzing your full picture..."):
                 response = chat.send_message(init_prompt)
                 reply = response.text
-            st.session_state.ai_messages.append({"role": "user", "content": init_prompt})
+            
+            st.session_state.ai_messages.append({"role": "user", "content": init_prompt, "timestamp": datetime.now().isoformat()})
             save_ai_message("user", init_prompt)
-            st.session_state.ai_messages.append({"role": "model", "content": reply})
+            st.session_state.ai_messages.append({"role": "model", "content": reply, "timestamp": datetime.now().isoformat()})
             save_ai_message("model", reply)
             st.rerun()
-
         for msg in st.session_state.ai_messages:
             role = "assistant" if msg["role"] == "model" else "user"
             with st.chat_message(role):
