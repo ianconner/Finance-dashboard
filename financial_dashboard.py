@@ -122,34 +122,68 @@ def peer_benchmark(current: float):
 # ----------------------------------------------------------------------
 # --------------------------- DATABASE SETUP (100% SAFE) ---------------
 # ----------------------------------------------------------------------
+DB_AVAILABLE = False
+engine = None
+
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
 def create_db_engine():
     url = st.secrets["postgres_url"]
     if url.startswith("postgres://"):
         url = url.replace("postgres:", "postgresql+psycopg2:", 1)
     
-    # Add SSL mode and connection timeout parameters
-    engine = create_engine(
-        url,
-        pool_pre_ping=True,
-        pool_recycle=300,
-        connect_args={
-            "sslmode": "require",
-            "connect_timeout": 10,
+    # Try with different SSL configurations
+    connect_args_options = [
+        # Option 1: Prefer SSL but allow fallback
+        {
+            "sslmode": "prefer",
+            "connect_timeout": 15,
             "keepalives": 1,
             "keepalives_idle": 30,
             "keepalives_interval": 10,
             "keepalives_count": 5
+        },
+        # Option 2: Require SSL
+        {
+            "sslmode": "require",
+            "connect_timeout": 15,
+        },
+        # Option 3: No SSL verification
+        {
+            "sslmode": "allow",
+            "connect_timeout": 15,
         }
-    )
-    # Test the connection
-    with engine.connect() as conn:
-        conn.execute(text("SELECT 1"))
-    return engine
+    ]
+    
+    last_error = None
+    for i, connect_args in enumerate(connect_args_options):
+        try:
+            st.info(f"Attempting connection method {i+1}/3...")
+            engine = create_engine(
+                url,
+                pool_pre_ping=True,
+                pool_recycle=300,
+                pool_size=5,
+                max_overflow=10,
+                connect_args=connect_args
+            )
+            # Test the connection
+            with engine.connect() as conn:
+                result = conn.execute(text("SELECT 1"))
+                result.fetchone()
+            st.success(f"✅ Connected using method {i+1}")
+            return engine
+        except Exception as e:
+            last_error = e
+            st.warning(f"Method {i+1} failed: {str(e)[:100]}")
+            continue
+    
+    # If all methods failed, raise the last error
+    raise last_error
 
 try:
     engine = create_db_engine()
     Base = declarative_base()
+    DB_AVAILABLE = True
 
     class MonthlyUpdate(Base):
         __tablename__ = "monthly_updates"
@@ -193,19 +227,28 @@ try:
         sess.add(RetirementGoal(target_amount=1000000.0))
         sess.commit()
     sess.close()
+    
+    st.success("✅ Database connected successfully!")
+    
 except Exception as e:
     st.error(f"⚠️ Database connection failed: {e}")
     st.warning("**Troubleshooting Steps:**")
     st.markdown("""
-    1. Check if your database server is running
-    2. Verify your `postgres_url` in Streamlit Secrets
-    3. Check if your IP is whitelisted in Aiven
-    4. Try restarting Streamlit
-    5. Contact your database provider if issue persists
+    1. **Check Aiven IP Whitelist** - Go to Aiven Console → Your DB → Overview → Allowed IP Addresses
+       - For Streamlit Cloud, you may need to whitelist `0.0.0.0/0` (all IPs)
+    2. **Verify your `postgres_url` in Streamlit Secrets** - Should include `?sslmode=require`
+    3. **Check if database is running** - Look at Aiven console status
+    4. **Try restarting** - Reboot the Streamlit app
+    5. **Check Aiven logs** - Look for connection rejection messages
+    
+    **Common fix**: In Aiven, go to your database settings and add `0.0.0.0/0` to allowed IPs
     """)
-    st.info("The app cannot run without database access. Please fix the connection and refresh.")
+    st.info("💡 **The app needs database access to save your data.** Please fix the connection above.")
+    
+    if st.button("🔄 Retry Connection"):
+        st.rerun()
+    
     st.stop()
-
 # ----------------------------------------------------------------------
 # --------------------------- DB HELPERS -------------------------------
 # ----------------------------------------------------------------------
