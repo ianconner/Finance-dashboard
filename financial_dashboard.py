@@ -1028,7 +1028,7 @@ else:
 
 tab1, tab2 = st.tabs(["Retirement (Sean + Kim)", "Taylor's Nest Egg"])
 
-    with tab1:
+with tab1:
         # Sean + Kim wealth journey graph
         df_pivot = df.pivot_table(index="date", columns="person", values="value", aggfunc="sum") \
                       .resample("ME").last().ffill().fillna(0)
