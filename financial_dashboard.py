@@ -432,7 +432,7 @@ def calculate_projection_cone(df_net, target_amount, target_year=2042):
     """
     Calculate 3 projection lines to retirement:
     1. Conservative (S&P 500 historical: 7% annual)
-    2. Current Pace (your actual YoY growth rate)
+    2. Current Pace (your actual average monthly growth)
     3. Optimistic (what you need to exceed goal)
     """
     if df_net.empty or len(df_net) < 2:
@@ -453,34 +453,39 @@ def calculate_projection_cone(df_net, target_amount, target_year=2042):
         freq='ME'
     )
     
-    # 1. CONSERVATIVE: S&P 500 baseline (7% annual = 0.5654% monthly)
-    sp500_monthly_rate = 0.07 / 12
+    # 1. CONSERVATIVE: S&P 500 baseline (7% annual real returns)
+    sp500_annual_rate = 0.07
+    sp500_monthly_rate = (1 + sp500_annual_rate) ** (1/12) - 1
     conservative = [current_value * ((1 + sp500_monthly_rate) ** (i + 1)) for i in range(months_to_retirement)]
     
-    # 2. CURRENT PACE: Calculate actual YoY growth rate using quarterly snapshots
-    quarterly_months = [1, 4, 7, 10]  # Jan, Apr, Jul, Oct
-    quarterly_data = df_net[df_net['date'].dt.month.isin(quarterly_months)].copy()
+    # 2. CURRENT PACE: Calculate actual historical growth rate
+    # Use ALL monthly data, not just quarters
+    df_sorted = df_net.sort_values('date').copy()
     
-    if len(quarterly_data) >= 2:
-        # Calculate YoY growth for each quarter
-        quarterly_data = quarterly_data.sort_values('date')
-        quarterly_data['yoy_growth'] = quarterly_data['value'].pct_change(periods=4)  # 4 quarters = 1 year
+    # Calculate total time period in years
+    start_date = df_sorted['date'].iloc[0]
+    end_date = df_sorted['date'].iloc[-1]
+    years_elapsed = (end_date - start_date).days / 365.25
+    
+    if years_elapsed > 0:
+        start_value = df_sorted['value'].iloc[0]
+        end_value = df_sorted['value'].iloc[-1]
         
-        # Use median YoY growth to smooth outliers
-        avg_yoy_growth = quarterly_data['yoy_growth'].dropna().median()
+        # Calculate CAGR (Compound Annual Growth Rate)
+        cagr = (end_value / start_value) ** (1 / years_elapsed) - 1
         
-        if pd.notna(avg_yoy_growth) and avg_yoy_growth > -0.5:  # Sanity check
-            monthly_growth_rate = (1 + avg_yoy_growth) ** (1/12) - 1
-        else:
-            monthly_growth_rate = sp500_monthly_rate  # Fallback to S&P
+        # Convert to monthly rate
+        monthly_growth_rate = (1 + cagr) ** (1/12) - 1
     else:
-        monthly_growth_rate = sp500_monthly_rate
+        monthly_growth_rate = sp500_monthly_rate  # Fallback
     
     current_pace = [current_value * ((1 + monthly_growth_rate) ** (i + 1)) for i in range(months_to_retirement)]
     
-    # 3. OPTIMISTIC: What rate do we need to hit 2x target?
+    # 3. OPTIMISTIC: What rate do we need to hit 1.5x target?
     optimistic_target = target_amount * 1.5
-    required_monthly_rate = (optimistic_target / current_value) ** (1 / months_to_retirement) - 1
+    years_to_retirement = months_to_retirement / 12
+    required_annual_rate = (optimistic_target / current_value) ** (1 / years_to_retirement) - 1
+    required_monthly_rate = (1 + required_annual_rate) ** (1/12) - 1
     optimistic = [current_value * ((1 + required_monthly_rate) ** (i + 1)) for i in range(months_to_retirement)]
     
     return future_dates, conservative, current_pace, optimistic
@@ -488,7 +493,7 @@ def calculate_projection_cone(df_net, target_amount, target_year=2042):
 def calculate_confidence_score(df_net, target_amount, target_year=2042):
     """
     Calculate probability of hitting retirement goal based on:
-    - Current value vs target
+    - Current pace projection vs target
     - Historical volatility
     - Time remaining
     """
@@ -502,38 +507,55 @@ def calculate_confidence_score(df_net, target_amount, target_year=2042):
     if months_remaining <= 0:
         return 100.0 if current_value >= target_amount else 0.0, "At retirement date"
     
-    # Calculate historical monthly returns
-    df_sorted = df_net.sort_values('date')
+    # Calculate historical CAGR
+    df_sorted = df_net.sort_values('date').copy()
+    start_date = df_sorted['date'].iloc[0]
+    end_date = df_sorted['date'].iloc[-1]
+    years_elapsed = (end_date - start_date).days / 365.25
+    
+    if years_elapsed > 0:
+        start_value = df_sorted['value'].iloc[0]
+        end_value = df_sorted['value'].iloc[-1]
+        cagr = (end_value / start_value) ** (1 / years_elapsed) - 1
+        monthly_rate = (1 + cagr) ** (1/12) - 1
+    else:
+        return 50.0, "Insufficient data"
+    
+    # Project current pace to 2042
+    projected_value = current_value * ((1 + monthly_rate) ** months_remaining)
+    
+    # Simple confidence calculation
+    if projected_value >= target_amount * 1.2:
+        # Well above target
+        confidence = 95.0
+        method = "On track - exceeding target"
+    elif projected_value >= target_amount:
+        # Above target
+        confidence = 85.0
+        method = "On track - meeting target"
+    elif projected_value >= target_amount * 0.8:
+        # Close to target
+        confidence = 70.0
+        method = "Close - minor adjustment may help"
+    elif projected_value >= target_amount * 0.6:
+        # Below target
+        confidence = 50.0
+        method = "Below target - adjustment needed"
+    else:
+        # Well below target
+        confidence = 30.0
+        method = "Significant adjustment needed"
+    
+    # Adjust for volatility
     df_sorted['monthly_return'] = df_sorted['value'].pct_change()
+    volatility = df_sorted['monthly_return'].std()
     
-    # Get mean and std dev of returns
-    mean_return = df_sorted['monthly_return'].mean()
-    std_return = df_sorted['monthly_return'].std()
+    if pd.notna(volatility) and volatility > 0:
+        # Higher volatility = lower confidence
+        volatility_adjustment = min(15, volatility * 100)
+        confidence = max(5, confidence - volatility_adjustment)
     
-    if pd.isna(mean_return) or pd.isna(std_return) or std_return == 0:
-        # Simple linear projection if we can't calculate volatility
-        needed_growth = (target_amount - current_value) / current_value
-        if needed_growth <= 0:
-            return 95.0, "Already at/above target"
-        else:
-            progress_pct = (current_value / target_amount) * 100
-            return min(95, max(20, progress_pct)), "Linear projection"
-    
-    # Monte Carlo-style probability
-    # Calculate required monthly return to hit target
-    required_return = (target_amount / current_value) ** (1 / months_remaining) - 1
-    
-    # Z-score: how many standard deviations away is required return from mean?
-    z_score = (required_return - mean_return) / std_return
-    
-    # Convert to probability (normal distribution approximation)
-    from scipy.stats import norm
-    probability = norm.cdf(-z_score) * 100  # Probability of exceeding required return
-    
-    # Cap between 5% and 95% for realism
-    confidence = min(95, max(5, probability))
-    
-    return round(confidence, 1), "Statistical projection"
+    return round(confidence, 1), method
 # ----------------------------------------------------------------------
 # --------------------------- UI ---------------------------------------
 # ----------------------------------------------------------------------
@@ -1004,29 +1026,33 @@ else:
         st.info("Upload your Fidelity CSV and add a monthly update. S.A.G.E. is ready when you are.")
         st.stop()
 
-    tab1, tab2 = st.tabs(["Family Progress", "Goals & Projections"])
+   tab1, tab2 = st.tabs(["Retirement (Sean + Kim)", "Taylor's Nest Egg"])
 
     with tab1:
+        # Sean + Kim wealth journey graph
         df_pivot = df.pivot_table(index="date", columns="person", values="value", aggfunc="sum") \
                       .resample("ME").last().ffill().fillna(0)
-        df_pivot["Sean + Kim"] = df_pivot.get("Sean", 0) + df_pivot.get("Kim", 0)
+        
+        # Only Sean + Kim for this tab
+        df_sean_kim = df_pivot[['Sean', 'Kim']].copy() if 'Sean' in df_pivot.columns and 'Kim' in df_pivot.columns else df_pivot
+        df_sean_kim["Sean + Kim"] = df_sean_kim.get("Sean", 0) + df_sean_kim.get("Kim", 0)
 
         fig = go.Figure()
-        colors = {"Sean": "#636EFA", "Kim": "#EF553B", "Taylor": "#00CC96", "Sean + Kim": "#AB63FA"}
-        width = {"Sean + Kim": 5, "Sean": 3, "Kim": 3, "Taylor": 3}
+        colors = {"Sean": "#636EFA", "Kim": "#EF553B", "Sean + Kim": "#AB63FA"}
+        width = {"Sean + Kim": 5, "Sean": 3, "Kim": 3}
 
-        for person in ["Sean", "Kim", "Taylor", "Sean + Kim"]:
-            if person in df_pivot.columns:
+        for person in ["Sean", "Kim", "Sean + Kim"]:
+            if person in df_sean_kim.columns:
                 fig.add_trace(go.Scatter(
-                    x=df_pivot.index,
-                    y=df_pivot[person],
+                    x=df_sean_kim.index,
+                    y=df_sean_kim[person],
                     name=person,
                     line=dict(color=colors[person], width=width.get(person, 3)),
                     hovertemplate=f"<b>{person}</b><br>%{{x|%b %Y}}: $%{{y:,.0f}}<extra></extra>"
                 ))
 
         fig.update_layout(
-            title="Our Family Wealth Journey",
+            title="Retirement Portfolio Growth (Sean + Kim)",
             xaxis_title="Date",
             yaxis_title="Total Value ($)",
             hovermode="x unified",
@@ -1039,11 +1065,11 @@ else:
         st.markdown("## 📈 Month-over-Month Analysis")
         
         # Calculate MoM changes ($ and %)
-        mom_dollar = df_pivot.diff().round(0)
-        mom_pct = df_pivot.pct_change() * 100
+        mom_dollar = df_sean_kim.diff().round(0)
+        mom_pct = df_sean_kim.pct_change() * 100
         
         # Get available years
-        available_years = sorted(df_pivot.index.year.unique(), reverse=True)
+        available_years = sorted(df_sean_kim.index.year.unique(), reverse=True)
         
         # Create tabs for each year
         year_tabs = st.tabs([str(year) for year in available_years])
@@ -1051,7 +1077,7 @@ else:
         for year_tab, year in zip(year_tabs, available_years):
             with year_tab:
                 # Filter data for this year
-                year_mask = df_pivot.index.year == year
+                year_mask = df_sean_kim.index.year == year
                 year_data_dollar = mom_dollar[year_mask]
                 year_data_pct = mom_pct[year_mask]
                 
@@ -1064,7 +1090,7 @@ else:
                 for date in year_data_dollar.index:
                     row = {'Date': date.strftime('%b %Y')}
                     
-                    for person in ['Sean', 'Kim', 'Taylor', 'Sean + Kim']:
+                    for person in ['Sean', 'Kim', 'Sean + Kim']:
                         if person in year_data_dollar.columns:
                             dollar_val = year_data_dollar.loc[date, person]
                             pct_val = year_data_pct.loc[date, person]
@@ -1102,7 +1128,7 @@ else:
         st.markdown("## 📅 Year-over-Year (December to December)")
         
         # Get December data for each year
-        december_data = df_pivot[df_pivot.index.month == 12].copy()
+        december_data = df_sean_kim[df_sean_kim.index.month == 12].copy()
         
         if len(december_data) >= 2:
             yoy_data = []
@@ -1117,7 +1143,7 @@ else:
                 
                 row = {'Period': f'Dec {prev_year} → Dec {curr_year}'}
                 
-                for person in ['Sean', 'Kim', 'Taylor', 'Sean + Kim']:
+                for person in ['Sean', 'Kim', 'Sean + Kim']:
                     if person in prev_data.index and person in curr_data.index:
                         prev_val = prev_data[person]
                         curr_val = curr_data[person]
@@ -1147,60 +1173,119 @@ else:
             st.info("Need at least 2 years of December data for YoY comparison")
 
     with tab2:
-        st.subheader("Retirement Goal Progress")
-        cur = df_net["value"].iloc[-1] if not df_net.empty else 0
-        target = get_retirement_goal()
-        progress = min(cur / target, 1.0)
-        years_left = 2042 - datetime.now().year
+        st.markdown("# 💎 Taylor's Nest Egg")
+        st.caption("Building long-term wealth for Taylor's future")
         
-        st.progress(progress)
-        st.write(f"**Retirement 2042** • ${cur:,.0f} / ${target:,.0f} ({progress*100:.1f}%)")
-        st.write(f"📅 {years_left} years remaining")
-        
-        # Calculate needed monthly savings
-        if cur < target:
-            needed = target - cur
-            months_left = years_left * 12
-            if months_left > 0:
-                monthly_needed = needed / months_left
-                st.info(f"💰 Need to save ~${monthly_needed:,.0f}/month at 0% growth to reach goal")
-        
-        st.markdown("---")
-        st.subheader("Taylor's Nest Egg")
         taylor_df = df[df["person"] == "Taylor"].sort_values("date")
+        
         if not taylor_df.empty:
             taylor_current = taylor_df["value"].iloc[-1]
             taylor_start = taylor_df["value"].iloc[0]
             taylor_growth = ((taylor_current / taylor_start) - 1) * 100 if taylor_start > 0 else 0
             
-            col1, col2 = st.columns(2)
+            # Calculate Taylor's CAGR
+            taylor_start_date = taylor_df['date'].iloc[0]
+            taylor_end_date = taylor_df['date'].iloc[-1]
+            taylor_years = (taylor_end_date - taylor_start_date).days / 365.25
+            
+            if taylor_years > 0 and taylor_start > 0:
+                taylor_cagr = ((taylor_current / taylor_start) ** (1 / taylor_years) - 1) * 100
+            else:
+                taylor_cagr = 0
+            
+            col1, col2, col3 = st.columns(3)
             col1.metric("Current Value", f"${taylor_current:,.0f}")
             col2.metric("Total Growth", f"{taylor_growth:+.1f}%")
+            col3.metric("Annual Growth Rate (CAGR)", f"{taylor_cagr:.1f}%")
             
-            fig_taylor = px.line(
-                taylor_df,
-                x="date",
-                y="value",
-                title="Taylor's Long-Term Growth",
-                labels={"value": "Value ($)", "date": "Date"}
+            # Taylor's growth chart
+            fig_taylor = go.Figure()
+            fig_taylor.add_trace(go.Scatter(
+                x=taylor_df["date"],
+                y=taylor_df["value"],
+                name="Taylor's Portfolio",
+                line=dict(color="#00CC96", width=3),
+                fill='tozeroy',
+                fillcolor='rgba(0,204,150,0.1)',
+                hovertemplate="<b>Taylor</b><br>%{x|%b %Y}: $%{y:,.0f}<extra></extra>"
+            ))
+            
+            fig_taylor.update_layout(
+                title="Taylor's Portfolio Growth Over Time",
+                xaxis_title="Date",
+                yaxis_title="Value ($)",
+                hovermode="x unified",
+                height=500
             )
-            fig_taylor.update_traces(line_color="#00CC96")
             st.plotly_chart(fig_taylor, use_container_width=True)
+            
+            st.markdown("---")
+            st.markdown("## 📊 Taylor's Month-over-Month")
+            
+            # Taylor MoM table
+            taylor_pivot = taylor_df.set_index('date')['value'].resample('ME').last().to_frame()
+            taylor_mom_dollar = taylor_pivot.diff().round(0)
+            taylor_mom_pct = taylor_pivot.pct_change() * 100
+            
+            # Get Taylor's years
+            taylor_years = sorted(taylor_pivot.index.year.unique(), reverse=True)
+            taylor_year_tabs = st.tabs([str(year) for year in taylor_years])
+            
+            for year_tab, year in zip(taylor_year_tabs, taylor_years):
+                with year_tab:
+                    year_mask = taylor_pivot.index.year == year
+                    year_dollar = taylor_mom_dollar[year_mask]
+                    year_pct = taylor_mom_pct[year_mask]
+                    
+                    if year_dollar.empty:
+                        st.info(f"No data for {year}")
+                        continue
+                    
+                    display_data = []
+                    for date in year_dollar.index:
+                        dollar_val = year_dollar.loc[date, 'value']
+                        pct_val = year_pct.loc[date, 'value']
+                        
+                        if pd.notna(dollar_val) and pd.notna(pct_val):
+                            display_data.append({
+                                'Date': date.strftime('%b %Y'),
+                                'Change $': dollar_val,
+                                'Change %': pct_val
+                            })
+                    
+                    df_taylor_display = pd.DataFrame(display_data)
+                    
+                    def color_negative_red(val):
+                        if isinstance(val, (int, float)):
+                            color = '#90EE90' if val > 0 else ('#FF6B6B' if val < 0 else 'white')
+                            return f'background-color: {color}; color: black'
+                        return ''
+                    
+                    styled_taylor = df_taylor_display.style.applymap(
+                        color_negative_red,
+                        subset=['Change $', 'Change %']
+                    ).format({
+                        'Change $': '${:,.0f}',
+                        'Change %': '{:+.2f}%'
+                    })
+                    
+                    st.dataframe(styled_taylor, use_container_width=True)
+            
+            st.markdown("---")
+            st.markdown("### 🎯 Long-Term Outlook for Taylor")
+            st.info(f"""
+            **Taylor is {2025 - 2021} years old.** Time is her greatest asset.
+            
+            At her current growth rate of {taylor_cagr:.1f}% annually:
+            - By age 18 (2039): ~${taylor_current * ((1 + taylor_cagr/100) ** 14):,.0f}
+            - By age 30 (2051): ~${taylor_current * ((1 + taylor_cagr/100) ** 26):,.0f}
+            - By age 40 (2061): ~${taylor_current * ((1 + taylor_cagr/100) ** 36):,.0f}
+            
+            Let compounding work its magic. 🚀
+            """)
+            
         else:
-            st.info("No data for Taylor yet")
-
-        st.subheader("Growth Projections")
-        horizon = st.slider("Projection horizon (months)", 12, 120, 36)
-        arima_f, _, _, lr_f, rf_f = ai_projections(df_net, horizon)
-
-        if arima_f is not None:
-            future_dates = pd.date_range(df_net["date"].max() + pd.DateOffset(months=1), periods=horizon, freq='ME')
-            fig_proj = go.Figure()
-            fig_proj.add_trace(go.Scatter(x=df_net["date"], y=df_net["value"], name="Historical", line=dict(color="#AB63FA")))
-            fig_proj.add_trace(go.Scatter(x=future_dates, y=arima_f, name="ARIMA Forecast", line=dict(dash="dot")))
-            fig_proj.add_trace(go.Scatter(x=future_dates, y=lr_f, name="Linear Trend", line=dict(dash="dash")))
-            fig_proj.update_layout(title=f"Where we're headed (next {horizon} months)", height=500)
-            st.plotly_chart(fig_proj, use_container_width=True)
+            st.info("No data for Taylor yet. Add her first monthly update to get started!")
 
     st.download_button(
         "Export All Monthly Data",
