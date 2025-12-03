@@ -961,7 +961,7 @@ if "ai_chat_session" not in st.session_state:
 # ------------------- AI CHAT PAGE (FULLY INTACT) -------------------
 if st.session_state.page == "ai":
     st.subheader("S.A.G.E. | Strategic Asset Growth Engine")
-    st.caption("Let's review, refine, and grow — together.")
+    st.caption("Let's review, refine, and grow – together.")
 
     api_key = st.secrets.get("GOOGLE_API_KEY", "")
     if not api_key:
@@ -984,27 +984,21 @@ if st.session_state.page == "ai":
         # Check if we need to generate a fresh analysis
         should_analyze = False
         
-        # Trigger analysis if: no messages yet, or user just uploaded portfolio
-        if not st.session_state.ai_messages:
+        # Only trigger analysis if: no messages yet AND portfolio is uploaded AND we have net worth data
+        if not st.session_state.ai_messages and not df_port.empty and not df_net.empty:
             should_analyze = True
-        elif not df_port.empty:
-            # Check if last message is old or doesn't contain current data
-            if st.session_state.ai_messages:
-                last_msg = st.session_state.ai_messages[-1]
-                # If last message is more than 1 day old, re-analyze
-                if 'timestamp' not in last_msg or (datetime.now() - datetime.fromisoformat(str(last_msg.get('timestamp', datetime.now())))).days >= 1:
-                    should_analyze = True
         
-        if should_analyze and not df_port.empty:
-            retirement_target = get_retirement_goal()
-            years_to_retirement = 2042 - datetime.now().year
-            
-            # Calculate current pace projection
-            future_dates, conservative, current_pace, optimistic = calculate_projection_cone(df_net, retirement_target, 2042)
-            projected_2042 = current_pace[-1] if current_pace is not None else 0
-            confidence, conf_method = calculate_confidence_score(df_net, retirement_target, 2042)
-            
-            init_prompt = f"""Here's our current situation (as of {datetime.now().strftime('%B %d, %Y')}):
+        if should_analyze:
+            try:
+                retirement_target = get_retirement_goal()
+                years_to_retirement = 2042 - datetime.now().year
+                
+                # Calculate current pace projection
+                future_dates, conservative, current_pace, optimistic = calculate_projection_cone(df_net, retirement_target, 2042)
+                projected_2042 = current_pace[-1] if current_pace is not None else 0
+                confidence, conf_method = calculate_confidence_score(df_net, retirement_target, 2042)
+                
+                init_prompt = f"""Here's our current situation (as of {datetime.now().strftime('%B %d, %Y')}):
 
 **RETIREMENT GOAL**: ${retirement_target:,.0f} by 2042 ({years_to_retirement} years remaining)
 
@@ -1025,31 +1019,43 @@ if st.session_state.page == "ai":
 - Top Holding: {port_summary.get('top_holding', 'N/A')} ({port_summary.get('top_allocation', 0):.1f}% of portfolio)
 
 Give me your analysis: Are we on track? Any red flags? What should we focus on?"""
-            
-            with st.spinner("S.A.G.E. is analyzing your full picture..."):
-                response = chat.send_message(init_prompt)
-                reply = response.text
-            
-            st.session_state.ai_messages.append({"role": "user", "content": init_prompt, "timestamp": datetime.now().isoformat()})
-            save_ai_message("user", init_prompt)
-            st.session_state.ai_messages.append({"role": "model", "content": reply, "timestamp": datetime.now().isoformat()})
-            save_ai_message("model", reply)
-            st.rerun()
+                
+                with st.spinner("S.A.G.E. is analyzing your full picture..."):
+                    try:
+                        response = chat.send_message(init_prompt)
+                        reply = response.text
+                        
+                        st.session_state.ai_messages.append({"role": "user", "content": init_prompt, "timestamp": datetime.now().isoformat()})
+                        save_ai_message("user", init_prompt)
+                        st.session_state.ai_messages.append({"role": "model", "content": reply, "timestamp": datetime.now().isoformat()})
+                        save_ai_message("model", reply)
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Failed to get AI response: {e}")
+                        st.info("You can still chat with S.A.G.E. using the input below.")
+            except Exception as e:
+                st.error(f"Failed to prepare analysis: {e}")
+        
+        # Display chat history
         for msg in st.session_state.ai_messages:
             role = "assistant" if msg["role"] == "model" else "user"
             with st.chat_message(role):
                 st.markdown(msg["content"])
 
+        # Chat input
         user_input = st.chat_input("Ask S.A.G.E.: rebalance? risk? taxes? retirement?")
         if user_input:
             st.session_state.ai_messages.append({"role": "user", "content": user_input})
             save_ai_message("user", user_input)
             with st.spinner("S.A.G.E. is thinking..."):
-                response = chat.send_message(user_input)
-                reply = response.text
-            st.session_state.ai_messages.append({"role": "model", "content": reply})
-            save_ai_message("model", reply)
-            st.rerun()
+                try:
+                    response = chat.send_message(user_input)
+                    reply = response.text
+                    st.session_state.ai_messages.append({"role": "model", "content": reply})
+                    save_ai_message("model", reply)
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Failed to get AI response: {e}")
 
     if st.button("Back to Dashboard"):
         st.session_state.page = "home"
