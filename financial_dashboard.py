@@ -594,7 +594,7 @@ st.set_page_config(page_title="S.A.G.E. | Strategic Asset Growth Engine", layout
 
 # Check for database errors AFTER set_page_config
 if not DB_AVAILABLE:
-    st.error(f"⚠️ Database connection failed: {DB_ERROR if 'DB_ERROR' in globals() else 'Unknown error'}")
+    st.error(f"⚠️ Database connection failed: {DB_ERROR if DB_ERROR else 'Unknown error'}")
     st.warning("**Troubleshooting Steps:**")
     st.markdown("""
     1. **Verify your `postgres_url` in Streamlit Secrets**
@@ -608,6 +608,21 @@ if not DB_AVAILABLE:
 
 st.title("S.A.G.E. | Strategic Asset Growth Engine")
 st.caption("Your co-pilot in building generational wealth – together.")
+
+# Load data
+df = get_monthly_updates()
+df["date"] = pd.to_datetime(df["date"])
+df_net = pd.DataFrame()
+
+if not df.empty:
+    df_net = (
+        df[df["person"].isin(["Sean", "Kim"])]
+        .groupby("date")["value"].sum()
+        .reset_index()
+        .sort_values("date")
+    )
+    df_net["date"] = df_net["date"].dt.tz_localize(None)
+
 # ------------------------------------------------------------------
 # --------------------- TOP RETIREMENT GOAL -------------------------
 # ------------------------------------------------------------------
