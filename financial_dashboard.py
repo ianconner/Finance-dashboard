@@ -119,14 +119,16 @@ def peer_benchmark(current: float):
     vs = current - PEER_NET_WORTH_40YO
     pct = min(100, max(0, (current / PEER_NET_WORTH_40YO) * 50))
     return pct, vs
+
 # ----------------------------------------------------------------------
 # --------------------------- DATABASE SETUP (NEON OPTIMIZED) ----------
 # ----------------------------------------------------------------------
 DB_AVAILABLE = False
+DB_ERROR = None
 engine = None
 
 def create_db_engine():
-    """Create connection to Neon PostgreSQL"""
+    """Create connection to Neon PostgreSQL - NO STREAMLIT CALLS"""
     url = st.secrets["postgres_url"]
     
     # Neon uses postgresql:// by default
@@ -137,27 +139,21 @@ def create_db_engine():
     if "sslmode" not in url:
         url = url + ("&" if "?" in url else "?") + "sslmode=require"
     
-    try:
-        st.info("🔌 Connecting to Neon database...")
-        engine = create_engine(
-            url,
-            pool_pre_ping=True,
-            pool_recycle=300,
-            pool_size=5,
-            max_overflow=10,
-            echo=False
-        )
-        
-        # Test the connection
-        with engine.connect() as conn:
-            result = conn.execute(text("SELECT version()"))
-            version = result.fetchone()[0]
-            st.success(f"✅ Connected to database!")
-        
-        return engine
-    except Exception as e:
-        st.error(f"❌ Database connection failed: {str(e)}")
-        raise e
+    engine = create_engine(
+        url,
+        pool_pre_ping=True,
+        pool_recycle=300,
+        pool_size=5,
+        max_overflow=10,
+        echo=False
+    )
+    
+    # Test the connection
+    with engine.connect() as conn:
+        result = conn.execute(text("SELECT version()"))
+        version = result.fetchone()[0]
+    
+    return engine
 
 try:
     engine = create_db_engine()
@@ -207,27 +203,11 @@ try:
         sess.commit()
     sess.close()
     
-    st.success("✅ Database connected successfully!")
-    
 except Exception as e:
-    st.error(f"⚠️ Database connection failed: {e}")
-    st.warning("**Troubleshooting Steps:**")
-    st.markdown("""
-    1. **Check Aiven IP Whitelist** - Go to Aiven Console → Your DB → Overview → Allowed IP Addresses
-       - For Streamlit Cloud, you may need to whitelist `0.0.0.0/0` (all IPs)
-    2. **Verify your `postgres_url` in Streamlit Secrets** - Should include `?sslmode=require`
-    3. **Check if database is running** - Look at Aiven console status
-    4. **Try restarting** - Reboot the Streamlit app
-    5. **Check Aiven logs** - Look for connection rejection messages
-    
-    **Common fix**: In Aiven, go to your database settings and add `0.0.0.0/0` to allowed IPs
-    """)
-    st.info("💡 **The app needs database access to save your data.** Please fix the connection above.")
-    
-    if st.button("🔄 Retry Connection"):
-        st.rerun()
-    
-    st.stop()
+    # Store error to display AFTER st.set_page_config()
+    DB_AVAILABLE = False
+    DB_ERROR = str(e)
+
 # ----------------------------------------------------------------------
 # --------------------------- DB HELPERS -------------------------------
 # ----------------------------------------------------------------------
