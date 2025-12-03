@@ -969,7 +969,7 @@ if st.session_state.page == "ai":
     else:
         try:
             genai.configure(api_key=api_key)
-            model = genai.GenerativeModel('gemini-1.5-flash', system_instruction=SYSTEM_PROMPT)
+            model = genai.GenerativeModel('gemini-2.5-flash', system_instruction=SYSTEM_PROMPT)
             formatted_history = [
                 {"role": m["role"], "parts": [m["content"]]} 
                 for m in st.session_state.ai_messages 
