@@ -1287,7 +1287,7 @@ with tab2:
         else:
             st.info("No data for Taylor yet. Add her first monthly update to get started!")
 
-    st.download_button(
+st.download_button(
         "Export All Monthly Data",
         df.to_csv(index=False).encode(),
         f"sage-data-{datetime.now().strftime('%Y-%m-%d')}.csv",
