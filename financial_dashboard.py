@@ -1026,7 +1026,7 @@ else:
         st.info("Upload your Fidelity CSV and add a monthly update. S.A.G.E. is ready when you are.")
         st.stop()
 
-   tab1, tab2 = st.tabs(["Retirement (Sean + Kim)", "Taylor's Nest Egg"])
+tab1, tab2 = st.tabs(["Retirement (Sean + Kim)", "Taylor's Nest Egg"])
 
     with tab1:
         # Sean + Kim wealth journey graph
