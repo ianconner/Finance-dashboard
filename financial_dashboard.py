@@ -122,11 +122,33 @@ def peer_benchmark(current: float):
 # ----------------------------------------------------------------------
 # --------------------------- DATABASE SETUP (100% SAFE) ---------------
 # ----------------------------------------------------------------------
-try:
+@retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
+def create_db_engine():
     url = st.secrets["postgres_url"]
     if url.startswith("postgres://"):
         url = url.replace("postgres:", "postgresql+psycopg2:", 1)
-    engine = create_engine(url, pool_pre_ping=True, pool_recycle=300)
+    
+    # Add SSL mode and connection timeout parameters
+    engine = create_engine(
+        url,
+        pool_pre_ping=True,
+        pool_recycle=300,
+        connect_args={
+            "sslmode": "require",
+            "connect_timeout": 10,
+            "keepalives": 1,
+            "keepalives_idle": 30,
+            "keepalives_interval": 10,
+            "keepalives_count": 5
+        }
+    )
+    # Test the connection
+    with engine.connect() as conn:
+        conn.execute(text("SELECT 1"))
+    return engine
+
+try:
+    engine = create_db_engine()
     Base = declarative_base()
 
     class MonthlyUpdate(Base):
@@ -172,7 +194,16 @@ try:
         sess.commit()
     sess.close()
 except Exception as e:
-    st.error(f"Database connection failed: {e}")
+    st.error(f"⚠️ Database connection failed: {e}")
+    st.warning("**Troubleshooting Steps:**")
+    st.markdown("""
+    1. Check if your database server is running
+    2. Verify your `postgres_url` in Streamlit Secrets
+    3. Check if your IP is whitelisted in Aiven
+    4. Try restarting Streamlit
+    5. Contact your database provider if issue persists
+    """)
+    st.info("The app cannot run without database access. Please fix the connection and refresh.")
     st.stop()
 
 # ----------------------------------------------------------------------
