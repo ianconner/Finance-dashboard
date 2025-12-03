@@ -47,33 +47,69 @@ HISTORICAL_SP_MONTHLY = 0.07 / 12
 SYSTEM_PROMPT = """
 You are **S.A.G.E.** — *Strategic Asset Growth Engine*, a warm, brilliant, and deeply collaborative financial partner.
 
-**Mission**: Help your teammate (39, high risk tolerance, 15-year horizon) build life-changing wealth through smart, data-driven growth — together.
+**Mission**: Help Sean & Kim reach their retirement goal by 2042 (currently set at their target amount) + grow Taylor's long-term nest egg. This is their entire retirement — we don't fuck this up.
+
+**Core Philosophy - The Warren Buffett Way**:
+- Long-term compounding > short-term gains
+- ETFs & Mutual Funds are the foundation (Vanguard, Fidelity index funds)
+- Individual stocks ONLY for high-conviction, blue-chip positions (rare)
+- Risk management: Protect downside, don't chase returns
+- Tax efficiency: Minimize drag, maximize growth
+- We play chess, not poker — patience wins
 
 **Tone & Style**:
-- Warm, encouraging, and optimistic — but never sugarcoating.
-- Expert, precise, and analytical — every insight backed by numbers.
-- Light humor when it lands naturally.
+- Warm teammate — their win is your win
+- Honest, direct, encouraging — never sugarcoating
+- Expert and analytical — every insight backed by numbers
 - Collaborative: "We", "Let's", "Here's what I see", "I recommend we..."
-- No commands. No condescension. No "you should" or "do this now."
+- Light humor when natural
 - Celebrate wins: "Look at that — we're up 18% YTD!"
-- Acknowledge setbacks: "Ouch, tech dipped — but here's why it's temporary."
-- Think like a co-pilot: strategic, calm, forward-looking.
+- Acknowledge setbacks: "Ouch, tech dipped — but here's why it's temporary and what we're doing about it."
 
-**Core Framework**:
-- Beat S&P 500 by 3–5% annually through intelligent allocation.
-- Prioritize: high-conviction growth (ROE >15%), reasonable valuations (P/E < 5-yr avg), low debt.
-- Flag risks: concentration, volatility, tax drag.
-- Suggest rebalancing only when math supports it.
-- Align every move with retirement goals.
+**Decision Framework (Always Consider)**:
+1. Does this align with our 2042 retirement goal?
+2. Does it improve risk-adjusted returns?
+3. Can we sleep at night with this allocation?
+4. What's the tax impact?
+5. Does this beat S&P + 3-5% consistently?
 
-**Always Include**:
-- Current allocation breakdown
-- Performance vs S&P 500
-- Risk metrics (volatility, max drawdown)
-- Tax implications
-- One clear, actionable idea (if any)
+**Red Flags to Watch**:
+- Overconcentration (any holding >15% of portfolio)
+- Underperforming funds (trailing S&P for 2+ years)
+- High expense ratios (>0.50% for funds)
+- Emotional decision triggers ("sell everything" panic)
+- Short-term thinking
 
-You're not just an advisor — you're a teammate. Their win is your win. Let's grow this together.
+**Quarterly Review Focus (Jan/Apr/Jul/Oct snapshots)**:
+- Are we on pace for 2042 goal?
+- Any underperformers dragging us down?
+- Concentration risk?
+- Tax efficiency opportunities?
+- Rebalancing needed?
+
+**Taylor's Account**:
+- Track separately but don't ignore
+- She's 4 years old — time is her superpower
+- Long-term growth focus, conservative but aggressive enough to compound
+- Think: what will set her up for life by age 30-40?
+
+**Communication Examples**:
+✅ "We're up 14% YTD - crushing it! But I'm noticing tech is 28% of the portfolio. That's a bit hot. Let's discuss trimming 5-8% into VOO to lock gains while staying aggressive. Thoughts?"
+✅ "Ouch, we're down $12K this month. Market volatility. But our core holdings are solid — this is noise, not signal. Stay the course."
+✅ "At current pace, we'll hit $1.2M by 2042 — 20% ahead of target. Beautiful. Want to discuss increasing the goal or taking some risk off the table?"
+
+❌ "You should sell TSLA immediately."
+❌ "Your portfolio is underperforming."
+❌ "Do this now or you'll fail."
+
+**Always Reference**:
+- Current retirement goal amount
+- Current net worth (Sean + Kim combined)
+- Years until 2042
+- Portfolio holdings (when uploaded)
+- Historical performance trends
+
+You're not just an advisor — you're a long-term teammate building generational wealth together. Let's make 2042 legendary.
 """
 
 # ----------------------------------------------------------------------
@@ -83,7 +119,6 @@ def peer_benchmark(current: float):
     vs = current - PEER_NET_WORTH_40YO
     pct = min(100, max(0, (current / PEER_NET_WORTH_40YO) * 50))
     return pct, vs
-
 # ----------------------------------------------------------------------
 # --------------------------- DATABASE SETUP (100% SAFE) ---------------
 # ----------------------------------------------------------------------
@@ -108,11 +143,10 @@ try:
         account_type = Column(String, primary_key=True)
         __table_args__ = (PrimaryKeyConstraint('person', 'account_type'),)
 
-    class Goal(Base):
-        __tablename__ = "goals"
-        name = Column(String, primary_key=True)
-        target = Column(Float)
-        by_year = Column(Integer)
+    class RetirementGoal(Base):
+        __tablename__ = "retirement_goal"
+        id = Column(Integer, primary_key=True, default=1)
+        target_amount = Column(Float, default=1000000.0)
 
     class AIChat(Base):
         __tablename__ = "ai_chat"
@@ -130,41 +164,13 @@ try:
     # Create our tables
     Base.metadata.create_all(engine)
 
-    # SAFE MIGRATION: Fix goals table if needed (never drops)
-    inspector = inspect(engine)
-    if 'goals' in inspector.get_table_names():
-        columns = {c['name'] for c in inspector.get_columns('goals')}
-        with engine.begin() as conn:
-            if 'name' not in columns:
-                conn.execute(text("ALTER TABLE goals ADD COLUMN name VARCHAR"))
-            if 'target' not in columns:
-                conn.execute(text("ALTER TABLE goals ADD COLUMN target DOUBLE PRECISION"))
-            if 'by_year' not in columns:
-                conn.execute(text("ALTER TABLE goals ADD COLUMN by_year INTEGER"))
-
-              # Populate name safely using a CTE
-            conn.execute(text("""
-                WITH numbered_goals AS (
-                    SELECT ctid, row_number() OVER () as rn
-                    FROM goals
-                    WHERE name IS NULL OR name = ''
-                )
-                UPDATE goals
-                SET name = 'Goal ' || numbered_goals.rn::text
-                FROM numbered_goals
-                WHERE goals.ctid = numbered_goals.ctid
-            """))
-
-            # Set defaults
-            conn.execute(text("UPDATE goals SET target = 1000000 WHERE target IS NULL"))
-            conn.execute(text("UPDATE goals SET by_year = EXTRACT(YEAR FROM CURRENT_DATE)::int + 10 WHERE by_year IS NULL"))
-
-            # Add PK if missing
-            pk = inspector.get_pk_constraint('goals')
-            if not pk['constrained_columns']:
-                conn.execute(text("ALTER TABLE goals ADD PRIMARY KEY (name)"))
-
+    # SAFE MIGRATION: Ensure retirement goal exists
     Session = sessionmaker(bind=engine)
+    sess = Session()
+    if not sess.query(RetirementGoal).first():
+        sess.add(RetirementGoal(target_amount=1000000.0))
+        sess.commit()
+    sess.close()
 except Exception as e:
     st.error(f"Database connection failed: {e}")
     st.stop()
@@ -187,6 +193,8 @@ def reset_database():
     for p, types in defaults.items():
         for t in types:
             sess.merge(AccountConfig(person=p, account_type=t))
+    # Recreate retirement goal
+    sess.add(RetirementGoal(target_amount=1000000.0))
     sess.commit()
     sess.close()
 
@@ -224,17 +232,29 @@ def get_monthly_updates():
         for r in rows
     ])
 
-def get_goals():
+def get_retirement_goal():
     sess = get_session()
-    goals = sess.query(Goal).all()
+    goal = sess.query(RetirementGoal).first()
     sess.close()
-    return goals
+    return goal.target_amount if goal else 1000000.0
 
-def add_goal(name, target, by_year):
+def set_retirement_goal(amount):
     sess = get_session()
-    sess.merge(Goal(name=name, target=target, by_year=by_year))
+    goal = sess.query(RetirementGoal).first()
+    if goal:
+        goal.target_amount = amount
+    else:
+        sess.add(RetirementGoal(target_amount=amount))
     sess.commit()
     sess.close()
+
+def get_goals():
+    # Legacy function - now returns single retirement goal
+    return [{"name": "Retirement 2042", "target": get_retirement_goal(), "by_year": 2042}]
+
+def add_goal(name, target, by_year):
+    # Legacy function - now updates retirement goal
+    set_retirement_goal(target)
 
 def save_ai_message(role, content):
     sess = get_session()
@@ -261,6 +281,57 @@ def load_portfolio_csv():
     result = sess.query(PortfolioCSV).order_by(PortfolioCSV.id.desc()).first()
     sess.close()
     return result.csv_data if result else None
+# ----------------------------------------------------------------------
+# ----------------------- BULK IMPORT FROM EXCEL FORMAT ----------------
+# ----------------------------------------------------------------------
+def import_excel_format(df_excel):
+    """
+    Import data from Excel format:
+    Columns: Date, Sean, Kim, Kim+Sean, Monthly Diff, Mon % CHG, TSP, T3W, Roth, Trl IRA, Stocks, Taylor
+    
+    Maps to database:
+    - Sean's accounts: TSP, T3W, Roth IRA, IRA (Trl IRA), Personal (Stocks)
+    - Kim's account: Retirement (from Kim column)
+    - Taylor's account: Personal
+    """
+    imported = 0
+    errors = []
+    
+    for idx, row in df_excel.iterrows():
+        try:
+            date = pd.to_datetime(row['Date']).date()
+            
+            # Sean's accounts
+            if pd.notna(row.get('TSP')):
+                add_monthly_update(date, 'Sean', 'TSP', float(str(row['TSP']).replace('$', '').replace(',', '')))
+                imported += 1
+            if pd.notna(row.get('T3W')):
+                add_monthly_update(date, 'Sean', 'T3W', float(str(row['T3W']).replace('$', '').replace(',', '')))
+                imported += 1
+            if pd.notna(row.get('Roth')):
+                add_monthly_update(date, 'Sean', 'Roth IRA', float(str(row['Roth']).replace('$', '').replace(',', '')))
+                imported += 1
+            if pd.notna(row.get('Trl IRA')):
+                add_monthly_update(date, 'Sean', 'IRA', float(str(row['Trl IRA']).replace('$', '').replace(',', '')))
+                imported += 1
+            if pd.notna(row.get('Stocks')):
+                add_monthly_update(date, 'Sean', 'Personal', float(str(row['Stocks']).replace('$', '').replace(',', '')))
+                imported += 1
+            
+            # Kim's account
+            if pd.notna(row.get('Kim')):
+                add_monthly_update(date, 'Kim', 'Retirement', float(str(row['Kim']).replace('$', '').replace(',', '')))
+                imported += 1
+            
+            # Taylor's account
+            if pd.notna(row.get('Taylor')):
+                add_monthly_update(date, 'Taylor', 'Personal', float(str(row['Taylor']).replace('$', '').replace(',', '')))
+                imported += 1
+                
+        except Exception as e:
+            errors.append(f"Row {idx}: {str(e)}")
+    
+    return imported, errors
 
 # ----------------------------------------------------------------------
 # ----------------------- ENHANCED PORTFOLIO PARSER --------------------
@@ -303,7 +374,7 @@ def parse_portfolio_csv(file_obj):
     df['ticker'] = df['Symbol'].str.upper().str.strip()
     df['market_value'] = df['Current Value']
     df['cost_basis'] = df['Cost Basis Total']
-    df['shares'] = df['Quantity']  # ← Fixed line
+    df['shares'] = df['Quantity']
     df['price'] = df['Last Price']
     df['unrealized_gain'] = df['market_value'] - df['cost_basis']
     df['pct_gain'] = (df['unrealized_gain'] / df['cost_basis']) * 100
@@ -354,7 +425,6 @@ def ai_projections(df_net, horizon=24):
     rf_pred = rf.predict(np.arange(len(df), len(df)+horizon).reshape(-1, 1))
 
     return forecast, lower, upper, lr_pred, rf_pred
-
 # ----------------------------------------------------------------------
 # --------------------------- UI ---------------------------------------
 # ----------------------------------------------------------------------
@@ -375,6 +445,51 @@ if not df.empty:
         .sort_values("date")
     )
     df_net["date"] = df_net["date"].dt.tz_localize(None)
+
+# ------------------------------------------------------------------
+# --------------------- TOP RETIREMENT GOAL -------------------------
+# ------------------------------------------------------------------
+if not df.empty:
+    cur_total = df_net["value"].iloc[-1]
+    retirement_target = get_retirement_goal()
+    progress_pct = (cur_total / retirement_target) * 100
+    years_remaining = 2042 - datetime.now().year
+    
+    st.markdown("# 🎯 RETIREMENT 2042")
+    
+    col1, col2, col3 = st.columns([2, 1, 1])
+    with col1:
+        st.metric("Current Net Worth (Sean + Kim)", f"${cur_total:,.0f}")
+    with col2:
+        st.metric("Target", f"${retirement_target:,.0f}")
+    with col3:
+        st.metric("Progress", f"{progress_pct:.1f}%")
+    
+    # Progress bar with color coding
+    if progress_pct >= 100:
+        st.success(f"🎉 Goal achieved! You're at {progress_pct:.1f}% of target!")
+    else:
+        st.progress(min(progress_pct / 100, 1.0))
+        st.info(f"📅 {years_remaining} years remaining until retirement")
+    
+    # Goal adjustment slider
+    st.markdown("#### Adjust Retirement Goal")
+    new_target = st.slider(
+        "Target Amount",
+        min_value=500000,
+        max_value=5000000,
+        value=int(retirement_target),
+        step=50000,
+        format="$%d",
+        help="Adjust your retirement goal - SAGE will recalculate projections"
+    )
+    
+    if new_target != retirement_target:
+        set_retirement_goal(new_target)
+        st.success(f"Goal updated to ${new_target:,.0f}!")
+        st.rerun()
+    
+    st.markdown("---")
 
 # ------------------------------------------------------------------
 # --------------------- TOP SUMMARY + YTD ---------------------------
@@ -441,7 +556,36 @@ with st.sidebar:
 
     st.markdown("---")
     with st.expander("Data Tools", expanded=False):
-        st.subheader("Bulk Import Monthly")
+        st.subheader("Bulk Import - Excel Format")
+        excel_file = st.file_uploader(
+            "Upload your historical Excel data (Date, Sean, Kim, TSP, T3W, Roth, Trl IRA, Stocks, Taylor columns)",
+            type=["csv", "xlsx"],
+            key="excel_import"
+        )
+        if excel_file:
+            try:
+                if excel_file.name.endswith('.xlsx'):
+                    df_import = pd.read_excel(excel_file)
+                else:
+                    df_import = pd.read_csv(excel_file)
+                
+                imported, errors = import_excel_format(df_import)
+                
+                if imported > 0:
+                    st.success(f"✅ Imported {imported} records!")
+                if errors:
+                    st.warning(f"⚠️ {len(errors)} errors occurred")
+                    with st.expander("View Errors"):
+                        for err in errors[:10]:  # Show first 10 errors
+                            st.text(err)
+                
+                if imported > 0:
+                    st.rerun()
+            except Exception as e:
+                st.error(f"Import failed: {e}")
+        
+        st.markdown("---")
+        st.subheader("Bulk Import - Standard Format")
         monthly_file = st.file_uploader("CSV (date,person,account_type,value)", type="csv", key="monthly")
         if monthly_file:
             try:
@@ -567,16 +711,6 @@ with st.sidebar:
         st.success("Saved!")
         st.rerun()
 
-    st.subheader("Add Goal")
-    g_name = st.text_input("Name")
-    g_target = st.number_input("Target ($)", min_value=0.0)
-    g_year = st.number_input("By Year", min_value=2000, step=1)
-    if st.button("Add"):
-        if g_name:
-            add_goal(g_name, g_target, g_year)
-            st.success("Goal added!")
-            st.rerun()
-
 # ------------------------------------------------------------------
 # PAGE ROUTING
 # ------------------------------------------------------------------
@@ -611,7 +745,19 @@ if st.session_state.page == "ai":
             st.stop()
 
         if not st.session_state.ai_messages and not df_port.empty:
-            init_prompt = f"Net worth: ${df_net['value'].iloc[-1]:,.0f}\nPortfolio loaded with {len(df_port)} holdings."
+            retirement_target = get_retirement_goal()
+            years_to_retirement = 2042 - datetime.now().year
+            init_prompt = f"""Here's our current situation:
+            
+**Retirement Goal**: ${retirement_target:,.0f} by 2042 ({years_to_retirement} years remaining)
+**Current Net Worth (Sean + Kim)**: ${df_net['value'].iloc[-1]:,.0f}
+**Progress**: {(df_net['value'].iloc[-1] / retirement_target) * 100:.1f}%
+
+**Portfolio**: Loaded {len(df_port)} holdings from Fidelity
+**Total Portfolio Value**: ${port_summary.get('total_value', 0):,.0f}
+**Total Gain**: ${port_summary.get('total_gain', 0):,.0f} ({port_summary.get('total_gain_pct', 0):.1f}%)
+
+What's your initial analysis? Are we on track?"""
             with st.spinner("S.A.G.E. is analyzing your full picture..."):
                 response = chat.send_message(init_prompt)
                 reply = response.text
@@ -640,8 +786,7 @@ if st.session_state.page == "ai":
     if st.button("Back to Dashboard"):
         st.session_state.page = "home"
         st.rerun()
-
-# ------------------- HOME DASHBOARD (YOUR FULL BEAUTIFUL VERSION) -------------------
+        # ------------------- HOME DASHBOARD (YOUR FULL BEAUTIFUL VERSION) -------------------
 else:
     if df.empty:
         st.info("Upload your Fidelity CSV and add a monthly update. S.A.G.E. is ready when you are.")
@@ -683,17 +828,47 @@ else:
         st.dataframe(mom.tail(24).style.format("${:,.0f}"), use_container_width=True)
 
     with tab2:
-        st.subheader("Goals")
+        st.subheader("Retirement Goal Progress")
         cur = df_net["value"].iloc[-1] if not df_net.empty else 0
-        goals = get_goals()
-        if goals:
-            for g in goals:
-                prog = min(cur / g.target, 1.0)
-                years_left = g.by_year - datetime.now().year
-                st.progress(prog)
-                st.write(f"**{g.name}** • ${cur:,.0f} / ${g.target:,.0f} by {g.by_year} ({years_left:+} years)")
+        target = get_retirement_goal()
+        progress = min(cur / target, 1.0)
+        years_left = 2042 - datetime.now().year
+        
+        st.progress(progress)
+        st.write(f"**Retirement 2042** • ${cur:,.0f} / ${target:,.0f} ({progress*100:.1f}%)")
+        st.write(f"📅 {years_left} years remaining")
+        
+        # Calculate needed monthly savings
+        if cur < target:
+            needed = target - cur
+            months_left = years_left * 12
+            if months_left > 0:
+                monthly_needed = needed / months_left
+                st.info(f"💰 Need to save ~${monthly_needed:,.0f}/month at 0% growth to reach goal")
+        
+        st.markdown("---")
+        st.subheader("Taylor's Nest Egg")
+        taylor_df = df[df["person"] == "Taylor"].sort_values("date")
+        if not taylor_df.empty:
+            taylor_current = taylor_df["value"].iloc[-1]
+            taylor_start = taylor_df["value"].iloc[0]
+            taylor_growth = ((taylor_current / taylor_start) - 1) * 100 if taylor_start > 0 else 0
+            
+            col1, col2 = st.columns(2)
+            col1.metric("Current Value", f"${taylor_current:,.0f}")
+            col2.metric("Total Growth", f"{taylor_growth:+.1f}%")
+            
+            fig_taylor = px.line(
+                taylor_df,
+                x="date",
+                y="value",
+                title="Taylor's Long-Term Growth",
+                labels={"value": "Value ($)", "date": "Date"}
+            )
+            fig_taylor.update_traces(line_color="#00CC96")
+            st.plotly_chart(fig_taylor, use_container_width=True)
         else:
-            st.info("No goals set yet – add one in the sidebar!")
+            st.info("No data for Taylor yet")
 
         st.subheader("Growth Projections")
         horizon = st.slider("Projection horizon (months)", 12, 120, 36)
