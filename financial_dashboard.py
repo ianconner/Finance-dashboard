@@ -120,65 +120,44 @@ def peer_benchmark(current: float):
     pct = min(100, max(0, (current / PEER_NET_WORTH_40YO) * 50))
     return pct, vs
 # ----------------------------------------------------------------------
-# --------------------------- DATABASE SETUP (100% SAFE) ---------------
+# --------------------------- DATABASE SETUP (NEON OPTIMIZED) ----------
 # ----------------------------------------------------------------------
 DB_AVAILABLE = False
 engine = None
 
-@retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
 def create_db_engine():
+    """Create connection to Neon PostgreSQL"""
     url = st.secrets["postgres_url"]
+    
+    # Neon uses postgresql:// by default
     if url.startswith("postgres://"):
-        url = url.replace("postgres:", "postgresql+psycopg2:", 1)
+        url = url.replace("postgres://", "postgresql://", 1)
     
-    # Try with different SSL configurations
-    connect_args_options = [
-        # Option 1: Prefer SSL but allow fallback
-        {
-            "sslmode": "prefer",
-            "connect_timeout": 15,
-            "keepalives": 1,
-            "keepalives_idle": 30,
-            "keepalives_interval": 10,
-            "keepalives_count": 5
-        },
-        # Option 2: Require SSL
-        {
-            "sslmode": "require",
-            "connect_timeout": 15,
-        },
-        # Option 3: No SSL verification
-        {
-            "sslmode": "allow",
-            "connect_timeout": 15,
-        }
-    ]
+    # Ensure SSL is enabled for Neon
+    if "sslmode" not in url:
+        url = url + ("&" if "?" in url else "?") + "sslmode=require"
     
-    last_error = None
-    for i, connect_args in enumerate(connect_args_options):
-        try:
-            st.info(f"Attempting connection method {i+1}/3...")
-            engine = create_engine(
-                url,
-                pool_pre_ping=True,
-                pool_recycle=300,
-                pool_size=5,
-                max_overflow=10,
-                connect_args=connect_args
-            )
-            # Test the connection
-            with engine.connect() as conn:
-                result = conn.execute(text("SELECT 1"))
-                result.fetchone()
-            st.success(f"✅ Connected using method {i+1}")
-            return engine
-        except Exception as e:
-            last_error = e
-            st.warning(f"Method {i+1} failed: {str(e)[:100]}")
-            continue
-    
-    # If all methods failed, raise the last error
-    raise last_error
+    try:
+        st.info("🔌 Connecting to Neon database...")
+        engine = create_engine(
+            url,
+            pool_pre_ping=True,
+            pool_recycle=300,
+            pool_size=5,
+            max_overflow=10,
+            echo=False
+        )
+        
+        # Test the connection
+        with engine.connect() as conn:
+            result = conn.execute(text("SELECT version()"))
+            version = result.fetchone()[0]
+            st.success(f"✅ Connected to database!")
+        
+        return engine
+    except Exception as e:
+        st.error(f"❌ Database connection failed: {str(e)}")
+        raise e
 
 try:
     engine = create_db_engine()
