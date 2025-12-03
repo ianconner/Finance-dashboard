@@ -1054,7 +1054,7 @@ Give me your analysis: Are we on track? Any red flags? What should we focus on?"
     if st.button("Back to Dashboard"):
         st.session_state.page = "home"
         st.rerun()
-        # ------------------- HOME DASHBOARD (YOUR FULL BEAUTIFUL VERSION) -------------------
+# ------------------- HOME DASHBOARD (YOUR FULL BEAUTIFUL VERSION) -------------------
 else:
     if df.empty:
         st.info("Upload your Fidelity CSV and add a monthly update. S.A.G.E. is ready when you are.")
