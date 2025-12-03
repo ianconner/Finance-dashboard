@@ -609,26 +609,6 @@ def calculate_confidence_score(df_net, target_amount, target_year=2042):
         confidence = max(5, confidence - volatility_adjustment)
     
     return round(confidence, 1), method
-# ----------------------------------------------------------------------
-# --------------------------- UI ---------------------------------------
-# ----------------------------------------------------------------------
-st.set_page_config(page_title="S.A.G.E. | Strategic Asset Growth Engine", layout="wide")
-st.title("S.A.G.E. | Strategic Asset Growth Engine")
-st.caption("Your co-pilot in building generational wealth — together.")
-
-# Load data
-df = get_monthly_updates()
-df["date"] = pd.to_datetime(df["date"])
-df_net = pd.DataFrame()
-
-if not df.empty:
-    df_net = (
-        df[df["person"].isin(["Sean", "Kim"])]
-        .groupby("date")["value"].sum()
-        .reset_index()
-        .sort_values("date")
-    )
-    df_net["date"] = df_net["date"].dt.tz_localize(None)
 # ------------------------------------------------------------------
 # --------------------- TOP RETIREMENT GOAL -------------------------
 # ------------------------------------------------------------------
@@ -681,12 +661,12 @@ if not df.empty:
         value=int(retirement_target),
         step=50000,
         format="$%d",
-        help="Adjust your retirement goal - SAGE will recalculate projections"
+        help="Adjust your retirement goal - SAGE will recalculate projections",
+        key="goal_slider"
     )
     
     if new_target != retirement_target:
         set_retirement_goal(new_target)
-        st.success(f"Goal updated to ${new_target:,.0f}!")
         st.rerun()
     
     st.markdown("---")
