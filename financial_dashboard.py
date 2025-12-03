@@ -783,11 +783,11 @@ with st.sidebar:
                 except Exception as e:
                     st.error(f"Failed to load saved portfolio: {e}")
 
-          st.subheader("Talk to S.A.G.E.")
+        st.subheader("Talk to S.A.G.E.")
         if df_port.empty:
             st.warning("Upload portfolio CSV first to enable SAGE")
         
-        if st.button("Open Strategy Session", disabled=df_port.empty, use_container_width=True):
+        if st.button("S.A.G.E AI", disabled=df_port.empty, use_container_width=True):
             st.session_state.page = "ai"
             st.rerun()
 
