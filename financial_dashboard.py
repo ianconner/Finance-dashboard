@@ -332,13 +332,36 @@ def import_excel_format(df_excel):
     
     for idx, row in df_excel.iterrows():
         try:
-            date = pd.to_datetime(row['Date']).date()
+            # Parse date - handle multiple formats
+            date_str = str(row['Date']).strip()
+            
+            # Handle formats like "20-Sep", "Sep-20", "2020-09-01", etc.
+            try:
+                # Try standard parsing first
+                date = pd.to_datetime(date_str).date()
+            except:
+                # Handle "20-Sep" or "Sep-20" format
+                if '-' in date_str:
+                    parts = date_str.split('-')
+                    if len(parts[0]) == 2 and parts[0].isdigit():  # "20-Sep"
+                        year_short = int(parts[0])
+                        year = 2000 + year_short
+                        month_str = parts[1]
+                        date = pd.to_datetime(f"{month_str}-{year}", format='%b-%Y').date()
+                    else:  # "Sep-20"
+                        month_str = parts[0]
+                        year_short = int(parts[1])
+                        year = 2000 + year_short
+                        date = pd.to_datetime(f"{month_str}-{year}", format='%b-%Y').date()
+                else:
+                    raise ValueError(f"Cannot parse date: {date_str}")
             
             # Helper function to clean and convert values
             def clean_value(val):
                 if pd.isna(val):
                     return None
-                val_str = str(val).replace('$', '').replace(',', '').strip()
+                val_str = str(val).replace('
+, '').replace(',', '').strip()
                 if val_str == '' or val_str.lower() == 'nan':
                     return None
                 try:
