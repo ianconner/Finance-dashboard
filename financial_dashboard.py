@@ -796,7 +796,7 @@ excel_file = st.file_uploader(
         key="excel_import"
     )
     
-    if excel_file:
+if excel_file:
         try:
             if excel_file.name.endswith('.xlsx'):
                 df_import = pd.read_excel(excel_file)
