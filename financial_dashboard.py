@@ -786,63 +786,65 @@ with st.sidebar:
             st.session_state.page = "ai"
             st.rerun()
 
-    st.markdown("---")
-    with st.expander("Data Tools", expanded=False):
-        st.subheader("Bulk Import - Excel Format")
-        excel_file = st.file_uploader(
-            "Upload your historical Excel data (Date, Sean, Kim, TSP, T3W, Roth, Trl IRA, Stocks, Taylor columns)",
-            type=["csv", "xlsx"],
-            key="excel_import"
-        )
-        if excel_file:
-            try:
-                if excel_file.name.endswith('.xlsx'):
-                    df_import = pd.read_excel(excel_file)
-                else:
-                    df_import = pd.read_csv(excel_file)
-                
-                imported, errors = import_excel_format(df_import)
-                
-                if imported > 0:
-                    st.success(f"✅ Imported {imported} records!")
-                if errors:
-                    st.warning(f"⚠️ {len(errors)} errors occurred")
-                    with st.expander("View Errors"):
-                        for err in errors[:10]:  # Show first 10 errors
-                            st.text(err)
-                
-                if imported > 0:
-                    st.rerun()
-            except Exception as e:
-                st.error(f"Import failed: {e}")
-        
-        st.markdown("---")
-        st.subheader("Bulk Import - Standard Format")
-        monthly_file = st.file_uploader("CSV (date,person,account_type,value)", type="csv", key="monthly")
-        if monthly_file:
-            try:
-                df_import = pd.read_csv(monthly_file)
-                req = ['date', 'person', 'account_type', 'value']
-                if all(c in df_import.columns for c in req):
-                    df_import['date'] = pd.to_datetime(df_import['date']).dt.date
-                    for _, r in df_import.iterrows():
-                        add_monthly_update(r['date'], r['person'], r['account_type'], float(r['value']))
-                    st.success(f"Imported {len(df_import)} rows!")
-                else:
-                    st.error(f"Need: {req}")
-            except Exception as e:
-                st.error(f"Import error: {e}")
-
-        if st.button("Reset Database"):
-            if st.checkbox("I understand this deletes all data", key="confirm"):
-                reset_database()
-                sess = get_session()
-                sess.query(PortfolioCSV).delete()
-                sess.commit()
-                sess.close()
-                st.session_state.portfolio_csv = None
-                st.success("Reset complete.")
+   st.markdown("---")
+    st.subheader("Data Tools")
+    
+    st.markdown("**Bulk Import - Excel Format**")
+    excel_file = st.file_uploader(
+        "Upload your historical Excel data (Date, Sean, Kim, TSP, T3W, Roth, Tri IRA, Stocks, Taylor columns)",
+        type=["csv", "xlsx"],
+        key="excel_import"
+    )
+    
+    if excel_file:
+        try:
+            if excel_file.name.endswith('.xlsx'):
+                df_import = pd.read_excel(excel_file)
+            else:
+                df_import = pd.read_csv(excel_file)
+            
+            imported, errors = import_excel_format(df_import)
+            
+            if imported > 0:
+                st.success(f"✅ Imported {imported} records!")
                 st.rerun()
+            if errors:
+                st.warning(f"⚠️ {len(errors)} errors occurred")
+                st.text("First 10 errors:")
+                for err in errors[:10]:
+                    st.text(err)
+                
+        except Exception as e:
+            st.error(f"Import failed: {e}")
+    
+    st.markdown("---")
+    st.markdown("**Bulk Import - Standard Format**")
+    monthly_file = st.file_uploader("CSV (date,person,account_type,value)", type="csv", key="monthly")
+    if monthly_file:
+        try:
+            df_import = pd.read_csv(monthly_file)
+            req = ['date', 'person', 'account_type', 'value']
+            if all(c in df_import.columns for c in req):
+                df_import['date'] = pd.to_datetime(df_import['date']).dt.date
+                for _, r in df_import.iterrows():
+                    add_monthly_update(r['date'], r['person'], r['account_type'], float(r['value']))
+                st.success(f"Imported {len(df_import)} rows!")
+                st.rerun()
+            else:
+                st.error(f"Need: {req}")
+        except Exception as e:
+            st.error(f"Import error: {e}")
+
+    if st.button("Reset Database"):
+        if st.checkbox("I understand this deletes all data", key="confirm"):
+            reset_database()
+            sess = get_session()
+            sess.query(PortfolioCSV).delete()
+            sess.commit()
+            sess.close()
+            st.session_state.portfolio_csv = None
+            st.success("Reset complete.")
+            st.rerun()
 
     st.markdown("---")
     st.subheader("Backup & Restore")
