@@ -817,8 +817,8 @@ if excel_file:
         except Exception as e:
             st.error(f"Import failed: {e}")
     
-    st.markdown("---")
-    st.markdown("**Bulk Import - Standard Format**")
+st.markdown("---")
+st.markdown("**Bulk Import - Standard Format**")
     monthly_file = st.file_uploader("CSV (date,person,account_type,value)", type="csv", key="monthly")
     if monthly_file:
         try:
