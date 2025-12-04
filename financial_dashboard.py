@@ -786,7 +786,7 @@ with st.sidebar:
             st.session_state.page = "ai"
             st.rerun()
 
-   st.markdown("---")
+st.markdown("---")
     st.subheader("Data Tools")
     
     st.markdown("**Bulk Import - Excel Format**")
