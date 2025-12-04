@@ -819,7 +819,7 @@ if excel_file:
     
 st.markdown("---")
 st.markdown("**Bulk Import - Standard Format**")
-    monthly_file = st.file_uploader("CSV (date,person,account_type,value)", type="csv", key="monthly")
+monthly_file = st.file_uploader("CSV (date,person,account_type,value)", type="csv", key="monthly")
     if monthly_file:
         try:
             df_import = pd.read_csv(monthly_file)
