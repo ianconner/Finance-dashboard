@@ -786,17 +786,17 @@ with st.sidebar:
             st.session_state.page = "ai"
             st.rerun()
 
-st.markdown("---")
-st.subheader("Data Tools")
+    st.markdown("---")
+    st.subheader("Data Tools")
     
-st.markdown("**Bulk Import - Excel Format**")
-excel_file = st.file_uploader(
+    st.markdown("**Bulk Import - Excel Format**")
+    excel_file = st.file_uploader(
         "Upload your historical Excel data (Date, Sean, Kim, TSP, T3W, Roth, Tri IRA, Stocks, Taylor columns)",
         type=["csv", "xlsx"],
         key="excel_import"
     )
     
-if excel_file:
+    if excel_file:
         try:
             if excel_file.name.endswith('.xlsx'):
                 df_import = pd.read_excel(excel_file)
@@ -817,9 +817,9 @@ if excel_file:
         except Exception as e:
             st.error(f"Import failed: {e}")
     
-st.markdown("---")
-st.markdown("**Bulk Import - Standard Format**")
-monthly_file = st.file_uploader("CSV (date,person,account_type,value)", type="csv", key="monthly")
+    st.markdown("---")
+    st.markdown("**Bulk Import - Standard Format**")
+    monthly_file = st.file_uploader("CSV (date,person,account_type,value)", type="csv", key="monthly")
     if monthly_file:
         try:
             df_import = pd.read_csv(monthly_file)
