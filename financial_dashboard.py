@@ -789,7 +789,7 @@ with st.sidebar:
 st.markdown("---")
 st.subheader("Data Tools")
     
-    st.markdown("**Bulk Import - Excel Format**")
+st.markdown("**Bulk Import - Excel Format**")
     excel_file = st.file_uploader(
         "Upload your historical Excel data (Date, Sean, Kim, TSP, T3W, Roth, Tri IRA, Stocks, Taylor columns)",
         type=["csv", "xlsx"],
