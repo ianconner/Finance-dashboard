@@ -787,7 +787,7 @@ with st.sidebar:
             st.rerun()
 
 st.markdown("---")
-    st.subheader("Data Tools")
+st.subheader("Data Tools")
     
     st.markdown("**Bulk Import - Excel Format**")
     excel_file = st.file_uploader(
