@@ -611,7 +611,13 @@ st.caption("Your co-pilot in building generational wealth – together.")
 
 # Load data
 df = get_monthly_updates()
-df["date"] = pd.to_datetime(df["date"])
+
+# Safety check - handle empty dataframe
+if not df.empty and 'date' in df.columns:
+    df["date"] = pd.to_datetime(df["date"])
+else:
+    df = pd.DataFrame(columns=['date', 'person', 'account_type', 'value'])
+
 df_net = pd.DataFrame()
 
 if not df.empty:
@@ -621,7 +627,8 @@ if not df.empty:
         .reset_index()
         .sort_values("date")
     )
-    df_net["date"] = df_net["date"].dt.tz_localize(None)
+    if not df_net.empty:
+        df_net["date"] = df_net["date"].dt.tz_localize(None)
 
 # ------------------------------------------------------------------
 # --------------------- TOP RETIREMENT GOAL -------------------------
