@@ -320,10 +320,10 @@ def load_portfolio_csv():
 def import_excel_format(df_excel):
     """
     Import data from Excel format:
-    Columns: Date, Sean, Kim, Kim+Sean, Monthly Diff, Mon % CHG, TSP, T3W, Roth, Trl IRA, Stocks, Taylor
+    Columns: Date, Sean, Kim, Kim+Sean, Monthly Diff, Mon % CHG, TSP, T3W, Roth, Tri IRA, Stocks, Taylor
     
     Maps to database:
-    - Sean's accounts: TSP, T3W, Roth IRA, IRA (Trl IRA), Personal (Stocks)
+    - Sean's accounts: TSP, T3W, Roth IRA, IRA (Tri IRA), Personal (Stocks)
     - Kim's account: Retirement (from Kim column)
     - Taylor's account: Personal
     """
@@ -334,35 +334,64 @@ def import_excel_format(df_excel):
         try:
             date = pd.to_datetime(row['Date']).date()
             
+            # Helper function to clean and convert values
+            def clean_value(val):
+                if pd.isna(val):
+                    return None
+                val_str = str(val).replace('$', '').replace(',', '').strip()
+                if val_str == '' or val_str.lower() == 'nan':
+                    return None
+                try:
+                    return float(val_str)
+                except:
+                    return None
+            
             # Sean's accounts
-            if pd.notna(row.get('TSP')):
-                add_monthly_update(date, 'Sean', 'TSP', float(str(row['TSP']).replace('$', '').replace(',', '')))
+            tsp_val = clean_value(row.get('TSP'))
+            if tsp_val is not None:
+                add_monthly_update(date, 'Sean', 'TSP', tsp_val)
                 imported += 1
-            if pd.notna(row.get('T3W')):
-                add_monthly_update(date, 'Sean', 'T3W', float(str(row['T3W']).replace('$', '').replace(',', '')))
+                
+            t3w_val = clean_value(row.get('T3W'))
+            if t3w_val is not None:
+                add_monthly_update(date, 'Sean', 'T3W', t3w_val)
                 imported += 1
-            if pd.notna(row.get('Roth')):
-                add_monthly_update(date, 'Sean', 'Roth IRA', float(str(row['Roth']).replace('$', '').replace(',', '')))
+                
+            roth_val = clean_value(row.get('Roth'))
+            if roth_val is not None:
+                add_monthly_update(date, 'Sean', 'Roth IRA', roth_val)
                 imported += 1
-            if pd.notna(row.get('Trl IRA')):
-                add_monthly_update(date, 'Sean', 'IRA', float(str(row['Trl IRA']).replace('$', '').replace(',', '')))
+                
+            # Handle both "Trl IRA" and "Tri IRA" column names
+            tri_ira_val = None
+            if 'Tri IRA' in row.index:
+                tri_ira_val = clean_value(row.get('Tri IRA'))
+            elif 'Trl IRA' in row.index:
+                tri_ira_val = clean_value(row.get('Trl IRA'))
+                
+            if tri_ira_val is not None:
+                add_monthly_update(date, 'Sean', 'IRA', tri_ira_val)
                 imported += 1
-            if pd.notna(row.get('Stocks')):
-                add_monthly_update(date, 'Sean', 'Personal', float(str(row['Stocks']).replace('$', '').replace(',', '')))
+                
+            stocks_val = clean_value(row.get('Stocks'))
+            if stocks_val is not None:
+                add_monthly_update(date, 'Sean', 'Personal', stocks_val)
                 imported += 1
             
             # Kim's account
-            if pd.notna(row.get('Kim')):
-                add_monthly_update(date, 'Kim', 'Retirement', float(str(row['Kim']).replace('$', '').replace(',', '')))
+            kim_val = clean_value(row.get('Kim'))
+            if kim_val is not None:
+                add_monthly_update(date, 'Kim', 'Retirement', kim_val)
                 imported += 1
             
             # Taylor's account
-            if pd.notna(row.get('Taylor')):
-                add_monthly_update(date, 'Taylor', 'Personal', float(str(row['Taylor']).replace('$', '').replace(',', '')))
+            taylor_val = clean_value(row.get('Taylor'))
+            if taylor_val is not None:
+                add_monthly_update(date, 'Taylor', 'Personal', taylor_val)
                 imported += 1
                 
         except Exception as e:
-            errors.append(f"Row {idx}: {str(e)}")
+            errors.append(f"Row {idx} (Date: {row.get('Date', 'unknown')}): {str(e)}")
     
     return imported, errors
 
