@@ -364,8 +364,7 @@ def import_excel_format(df_excel):
             def clean_value(val):
                 if pd.isna(val):
                     return None
-                val_str = str(val).replace('
-, '').replace(',', '').strip()
+                val_str = str(val).replace(', '').replace(',', '').strip()
                 if val_str == '' or val_str.lower() == 'nan':
                     return None
                 try:
