@@ -1329,7 +1329,7 @@ with tab2:
             st.markdown("---")
             st.markdown("## 📊 Taylor's Month-over-Month")
             
-            # Taylor MoM table
+  # Taylor MoM table
             taylor_pivot = taylor_df.set_index('date')['value'].resample('ME').last().to_frame()
             taylor_mom_dollar = taylor_pivot.diff().round(0)
             taylor_mom_pct = taylor_pivot.pct_change() * 100
@@ -1360,6 +1360,10 @@ with tab2:
                                 'Change %': pct_val
                             })
                     
+                    if not display_data:
+                        st.info(f"No change data for {year}")
+                        continue
+                    
                     df_taylor_display = pd.DataFrame(display_data)
                     
                     def color_negative_red(val):
@@ -1368,15 +1372,19 @@ with tab2:
                             return f'background-color: {color}; color: black'
                         return ''
                     
-                    styled_taylor = df_taylor_display.style.applymap(
-                        color_negative_red,
-                        subset=['Change $', 'Change %']
-                    ).format({
-                        'Change $': '${:,.0f}',
-                        'Change %': '{:+.2f}%'
-                    })
-                    
-                    st.dataframe(styled_taylor, use_container_width=True)
+                    # Only apply styling if we have the columns
+                    if 'Change $' in df_taylor_display.columns and 'Change %' in df_taylor_display.columns:
+                        styled_taylor = df_taylor_display.style.map(
+                            color_negative_red,
+                            subset=['Change $', 'Change %']
+                        ).format({
+                            'Change $': '${:,.0f}',
+                            'Change %': '{:+.2f}%'
+                        })
+                        st.dataframe(styled_taylor, use_container_width=True)
+                    else:
+                        # If columns are missing, just display without styling
+                        st.dataframe(df_taylor_display, use_container_width=True)
             
             st.markdown("---")
             st.markdown("### 🎯 Long-Term Outlook for Taylor")
