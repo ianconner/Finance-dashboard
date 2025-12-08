@@ -683,6 +683,36 @@ if not df.empty:
     if not df_net.empty:
         df_net["date"] = df_net["date"].dt.tz_localize(None)
 
+if not df.empty:
+    st.markdown("### 🔍 DEBUG: Database Contents")
+    
+    # Show total records
+    st.write(f"Total records in database: {len(df)}")
+    
+    # Show breakdown by person
+    person_counts = df.groupby('person').size()
+    st.write("Records per person:")
+    st.write(person_counts)
+    
+    # Show latest month data
+    latest_date = df['date'].max()
+    st.write(f"\nLatest date in database: {latest_date}")
+    
+    latest_data = df[df['date'] == latest_date]
+    st.write("\nLatest month breakdown:")
+    st.dataframe(latest_data)
+    
+    # Show November 2025 specifically
+    nov_2025 = df[df['date'] == '2025-11-01']
+    if not nov_2025.empty:
+        st.write("\nNovember 2025 data:")
+        st.dataframe(nov_2025)
+        st.write(f"Sean total: ${nov_2025[nov_2025['person']=='Sean']['value'].sum():,.0f}")
+        st.write(f"Kim total: ${nov_2025[nov_2025['person']=='Kim']['value'].sum():,.0f}")
+        st.write(f"Combined: ${nov_2025[nov_2025['person'].isin(['Sean','Kim'])]['value'].sum():,.0f}")
+    
+    st.markdown("---")
+
 # ------------------------------------------------------------------
 # --------------------- TOP RETIREMENT GOAL -------------------------
 # ------------------------------------------------------------------
