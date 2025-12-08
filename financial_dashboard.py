@@ -326,6 +326,8 @@ def import_excel_format(df_excel):
     - Sean's accounts: TSP, T3W, Roth IRA, IRA (Tri IRA), Personal (Stocks)
     - Kim's account: Retirement (from Kim column)
     - Taylor's account: Personal
+    
+    If individual accounts are empty, uses the "Sean" total column
     """
     imported = 0
     errors = []
@@ -362,7 +364,8 @@ def import_excel_format(df_excel):
             def clean_value(val):
                 if pd.isna(val):
                     return None
-                val_str = str(val).replace('$', '').replace(',', '').strip()
+                val_str = str(val).replace('
+, '').replace(',', '').strip()
                 if val_str == '' or val_str.lower() == 'nan':
                     return None
                 try:
@@ -370,21 +373,27 @@ def import_excel_format(df_excel):
                 except:
                     return None
             
+            # Check if we have individual account data for Sean
+            sean_accounts_exist = False
+            
             # Sean's accounts
             tsp_val = clean_value(row.get('TSP'))
             if tsp_val is not None:
                 add_monthly_update(date, 'Sean', 'TSP', tsp_val)
                 imported += 1
+                sean_accounts_exist = True
                 
             t3w_val = clean_value(row.get('T3W'))
             if t3w_val is not None:
                 add_monthly_update(date, 'Sean', 'T3W', t3w_val)
                 imported += 1
+                sean_accounts_exist = True
                 
             roth_val = clean_value(row.get('Roth'))
             if roth_val is not None:
                 add_monthly_update(date, 'Sean', 'Roth IRA', roth_val)
                 imported += 1
+                sean_accounts_exist = True
                 
             # Handle both "Trl IRA" and "Tri IRA" column names
             tri_ira_val = None
@@ -396,11 +405,20 @@ def import_excel_format(df_excel):
             if tri_ira_val is not None:
                 add_monthly_update(date, 'Sean', 'IRA', tri_ira_val)
                 imported += 1
+                sean_accounts_exist = True
                 
             stocks_val = clean_value(row.get('Stocks'))
             if stocks_val is not None:
                 add_monthly_update(date, 'Sean', 'Personal', stocks_val)
                 imported += 1
+                sean_accounts_exist = True
+            
+            # If no individual accounts, use Sean total column
+            if not sean_accounts_exist:
+                sean_total = clean_value(row.get('Sean'))
+                if sean_total is not None:
+                    add_monthly_update(date, 'Sean', 'Personal', sean_total)
+                    imported += 1
             
             # Kim's account
             kim_val = clean_value(row.get('Kim'))
@@ -418,7 +436,6 @@ def import_excel_format(df_excel):
             errors.append(f"Row {idx} (Date: {row.get('Date', 'unknown')}): {str(e)}")
     
     return imported, errors
-
 # ----------------------------------------------------------------------
 # ----------------------- ENHANCED PORTFOLIO PARSER --------------------
 # ----------------------------------------------------------------------
