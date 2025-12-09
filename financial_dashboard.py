@@ -573,32 +573,8 @@ def calculate_projection_cone(df_net, target_amount, target_year=2042):
         start_value = df_sorted['value'].iloc[0]
         end_value = df_sorted['value'].iloc[-1]
         
-        # Calculate CAGR (Compound Annual Growth Rate)
-        cagr = (end_value / start_value) ** (1 / years_elapsed) - 1
-        
-        # Convert to monthly rate
-        monthly_growth_rate = (1 + cagr) ** (1/12) - 1
-    else:
-        monthly_growth_rate = sp500_monthly_rate  # Fallback
-    
-    current_pace = [current_value * ((1 + monthly_growth_rate) ** (i + 1)) for i in range(months_to_retirement)]
-    
-    # 3. OPTIMISTIC: What rate do we need to hit 1.5x target?
-    optimistic_target = target_amount * 1.5
-    years_to_retirement = months_to_retirement / 12
-    required_annual_rate = (optimistic_target / current_value) ** (1 / years_to_retirement) - 1
-    required_monthly_rate = (1 + required_annual_rate) ** (1/12) - 1
-    optimistic = [current_value * ((1 + required_monthly_rate) ** (i + 1)) for i in range(months_to_retirement)]
-    
-    return future_dates, conservative, current_pace, optimistic
-
-def calculate_confidence_score(df_net, target_amount, target_year=2042):
-    """
-    Calculate probability of hitting retirement goal based on:
-    - Current pace projection vs target
-    - Historical volatility
-    - Time remaining
-    """
+def calculate_confidence_score_fixed(df_net, target_amount, target_year=2042):
+    """Enhanced confidence scoring with better data validation"""
     if df_net.empty or len(df_net) < 2:
         return 50.0, "Insufficient data"
     
@@ -609,55 +585,104 @@ def calculate_confidence_score(df_net, target_amount, target_year=2042):
     if months_remaining <= 0:
         return 100.0 if current_value >= target_amount else 0.0, "At retirement date"
     
-    # Calculate historical CAGR
+    # Calculate historical CAGR with safeguards
     df_sorted = df_net.sort_values('date').copy()
     start_date = df_sorted['date'].iloc[0]
     end_date = df_sorted['date'].iloc[-1]
     years_elapsed = (end_date - start_date).days / 365.25
     
-    if years_elapsed > 0:
-        start_value = df_sorted['value'].iloc[0]
-        end_value = df_sorted['value'].iloc[-1]
-        cagr = (end_value / start_value) ** (1 / years_elapsed) - 1
-        monthly_rate = (1 + cagr) ** (1/12) - 1
-    else:
-        return 50.0, "Insufficient data"
+    # Require meaningful time period
+    if years_elapsed < 0.5:
+        return 50.0, "Need 6+ months of data for reliable projection"
     
-    # Project current pace to 2042
+    start_value = df_sorted['value'].iloc[0]
+    end_value = df_sorted['value'].iloc[-1]
+    
+    # Check for data quality
+    if start_value <= 0:
+        return 50.0, "Invalid starting value"
+    
+    cagr = (end_value / start_value) ** (1 / years_elapsed) - 1
+    
+    # Cap extreme CAGRs
+    cagr = max(-0.5, min(0.5, cagr))
+    
+    monthly_rate = (1 + cagr) ** (1/12) - 1
     projected_value = current_value * ((1 + monthly_rate) ** months_remaining)
     
-    # Simple confidence calculation
-    if projected_value >= target_amount * 1.2:
-        # Well above target
-        confidence = 95.0
-        method = "On track - exceeding target"
-    elif projected_value >= target_amount:
-        # Above target
-        confidence = 85.0
-        method = "On track - meeting target"
-    elif projected_value >= target_amount * 0.8:
-        # Close to target
-        confidence = 70.0
-        method = "Close - minor adjustment may help"
-    elif projected_value >= target_amount * 0.6:
-        # Below target
-        confidence = 50.0
-        method = "Below target - adjustment needed"
-    else:
-        # Well below target
-        confidence = 30.0
-        method = "Significant adjustment needed"
+    # Enhanced confidence calculation
+    ratio = projected_value / target_amount
     
-    # Adjust for volatility
+    if ratio >= 1.5:
+        confidence = 95.0
+        method = "Exceeding target significantly"
+    elif ratio >= 1.2:
+        confidence = 90.0
+        method = "Well above target"
+    elif ratio >= 1.0:
+        confidence = 80.0
+        method = "On track to meet target"
+    elif ratio >= 0.9:
+        confidence = 70.0
+        method = "Close - minor gap"
+    elif ratio >= 0.75:
+        confidence = 55.0
+        method = "Below target - adjustment recommended"
+    elif ratio >= 0.5:
+        confidence = 35.0
+        method = "Significant gap - action needed"
+    else:
+        confidence = 20.0
+        method = "Major adjustment required"
+    
+    # Adjust for volatility and time remaining
     df_sorted['monthly_return'] = df_sorted['value'].pct_change()
     volatility = df_sorted['monthly_return'].std()
     
     if pd.notna(volatility) and volatility > 0:
-        # Higher volatility = lower confidence
-        volatility_adjustment = min(15, volatility * 100)
-        confidence = max(5, confidence - volatility_adjustment)
+        # Higher volatility reduces confidence
+        volatility_penalty = min(20, volatility * 100)
+        confidence = max(5, confidence - volatility_penalty)
+    
+    # More time = higher confidence (more room for recovery)
+    years_remaining = months_remaining / 12
+    if years_remaining < 5:
+        time_penalty = (5 - years_remaining) * 2
+        confidence = max(5, confidence - time_penalty)
     
     return round(confidence, 1), method
+
+def validate_monthly_data(df):
+    """Check for common data issues"""
+    issues = []
+    
+    # Check for duplicate dates
+    duplicates = df[df.duplicated(subset=['date', 'person', 'account_type'], keep=False)]
+    if not duplicates.empty:
+        issues.append(f"Found {len(duplicates)} duplicate entries")
+    
+    # Check for negative values
+    negatives = df[df['value'] < 0]
+    if not negatives.empty:
+        issues.append(f"Found {len(negatives)} negative values")
+    
+    # Check for unrealistic monthly changes (>50%)
+    df_sorted = df.sort_values(['person', 'account_type', 'date'])
+    df_sorted['pct_change'] = df_sorted.groupby(['person', 'account_type'])['value'].pct_change()
+    extreme = df_sorted[abs(df_sorted['pct_change']) > 0.5]
+    if not extreme.empty:
+        issues.append(f"Found {len(extreme)} extreme month-over-month changes (>50%)")
+    
+    # Check for gaps in monthly data
+    for person in df['person'].unique():
+        person_data = df[df['person'] == person].sort_values('date')
+        if len(person_data) > 1:
+            date_diff = person_data['date'].diff()
+            gaps = date_diff[date_diff > pd.Timedelta(days=45)]  # More than 1.5 months
+            if not gaps.empty:
+                issues.append(f"{person}: Found {len(gaps)} gaps in monthly data")
+    
+    return issues
 # --------------------------- UI ---------------------------------------
 st.set_page_config(page_title="S.A.G.E. | Strategic Asset Growth Engine", layout="wide")
 
@@ -1014,6 +1039,21 @@ with st.sidebar:
         add_monthly_update(date_in, person, acct, float(val))
         st.success("Saved!")
         st.rerun()
+def add_data_quality_check():
+    """Add to sidebar for data validation"""
+    with st.expander("Data Quality Check", expanded=False):
+        if st.button("Run Validation"):
+            df = get_monthly_updates()
+            if not df.empty:
+                issues = validate_monthly_data(df)
+                if issues:
+                    st.warning("Data quality issues found:")
+                    for issue in issues:
+                        st.write(f"• {issue}")
+                else:
+                    st.success("✅ No data quality issues detected!")
+            else:
+                st.info("No data to validate yet")
 
 # ------------------------------------------------------------------
 # PAGE ROUTING
@@ -1127,6 +1167,45 @@ Give me your analysis: Are we on track? Any red flags? What should we focus on?"
     if st.button("Back to Dashboard"):
         st.session_state.page = "home"
         st.rerun()
+def build_ai_context(df_net, df_port, port_summary):
+    """Build comprehensive context for AI analysis"""
+    retirement_target = get_retirement_goal()
+    current_value = df_net['value'].iloc[-1]
+    
+    # Calculate key metrics safely
+    df_sorted = df_net.sort_values('date')
+    years_elapsed = (df_sorted['date'].iloc[-1] - df_sorted['date'].iloc[0]).days / 365.25
+    
+    context = {
+        'current_value': current_value,
+        'target': retirement_target,
+        'progress_pct': (current_value / retirement_target) * 100,
+        'years_to_retirement': 2042 - datetime.now().year,
+        'data_quality': {
+            'months_of_data': len(df_net),
+            'years_tracked': round(years_elapsed, 1),
+            'earliest_date': df_sorted['date'].iloc[0].strftime('%Y-%m-%d'),
+            'latest_date': df_sorted['date'].iloc[-1].strftime('%Y-%m-%d')
+        }
+    }
+    
+    # Only add CAGR if we have enough data
+    if years_elapsed >= 0.5:
+        start_value = df_sorted['value'].iloc[0]
+        cagr = (current_value / start_value) ** (1 / years_elapsed) - 1
+        context['historical_cagr'] = round(cagr * 100, 2)
+    
+    # Portfolio metrics
+    if not df_port.empty:
+        context['portfolio'] = {
+            'holdings_count': len(df_port),
+            'total_value': port_summary.get('total_value', 0),
+            'total_gain_pct': port_summary.get('total_gain_pct', 0),
+            'top_holding': port_summary.get('top_holding', 'N/A'),
+            'top_allocation_pct': port_summary.get('top_allocation', 0)
+        }
+    
+    return context
 # ------------------- HOME DASHBOARD (YOUR FULL BEAUTIFUL VERSION) -------------------
 else:
     if df.empty:
