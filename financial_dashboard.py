@@ -314,6 +314,7 @@ def load_portfolio_csv():
     result = sess.query(PortfolioCSV).order_by(PortfolioCSV.id.desc()).first()
     sess.close()
     return result.csv_data if result else None
+
 # ----------------------------------------------------------------------
 # ----------------------- BULK IMPORT FROM EXCEL FORMAT ----------------
 # ----------------------------------------------------------------------
@@ -326,8 +327,6 @@ def import_excel_format(df_excel):
     - Sean's accounts: TSP, T3W, Roth IRA, IRA (Tri IRA), Personal (Stocks)
     - Kim's account: Retirement (from Kim column)
     - Taylor's account: Personal
-    
-    If individual accounts are empty, uses the "Sean" total column
     """
     imported = 0
     errors = []
@@ -337,22 +336,17 @@ def import_excel_format(df_excel):
             # Parse date - handle multiple formats
             date_str = str(row['Date']).strip()
             
-            # Handle formats like "20-Sep", "Sep-20", "2020-09-01", etc.
             try:
-                # Try standard parsing first
                 date = pd.to_datetime(date_str).date()
             except:
-                # Handle "20-Sep" or "Sep-20" format
                 if '-' in date_str:
                     parts = date_str.split('-')
                     if len(parts[0]) == 2 and parts[0].isdigit():
-                        # Format: "20-Sep"
                         year_short = int(parts[0])
                         year = 2000 + year_short
                         month_str = parts[1]
                         date = pd.to_datetime(f"{month_str}-{year}", format='%b-%Y').date()
                     else:
-                        # Format: "Sep-20"
                         month_str = parts[0]
                         year_short = int(parts[1])
                         year = 2000 + year_short
@@ -435,6 +429,7 @@ def import_excel_format(df_excel):
             errors.append(f"Row {idx} (Date: {row.get('Date', 'unknown')}): {str(e)}")
     
     return imported, errors
+
 # ----------------------------------------------------------------------
 # ----------------------- ENHANCED PORTFOLIO PARSER --------------------
 # ----------------------------------------------------------------------
@@ -455,7 +450,7 @@ def parse_portfolio_csv(file_obj):
         st.error(f"CSV missing columns: {', '.join(missing)}")
         return pd.DataFrame(), {}
 
-    df = df[required + ['Account Name']].copy()
+    df = df[required + ['Account Name']].copy() if 'Account Name' in df.columns else df[required].copy()
     df = df.dropna(subset=required, how='any')
     df = df[df['Symbol'].astype(str).str.strip() != '']
     df = df[~df['Symbol'].astype(str).str.strip().str.lower().isin(
@@ -488,7 +483,7 @@ def parse_portfolio_csv(file_obj):
         'total_value': total_value,
         'total_cost': df['cost_basis'].sum(),
         'total_gain': df['unrealized_gain'].sum(),
-        'total_gain_pct': (df['unrealized_gain'].sum() / df['cost_basis'].sum()) * 100,
+        'total_gain_pct': (df['unrealized_gain'].sum() / df['cost_basis'].sum()) * 100 if df['cost_basis'].sum() > 0 else 0,
         'top_holding': df.loc[df['market_value'].idxmax(), 'ticker'] if not df.empty else None,
         'top_allocation': df['allocation'].max() * 100 if not df.empty else 0
     }
@@ -496,46 +491,14 @@ def parse_portfolio_csv(file_obj):
     return df[['ticker', 'shares', 'price', 'market_value', 'cost_basis', 'unrealized_gain', 'pct_gain', 'allocation']], summary
 
 # ----------------------------------------------------------------------
-# ----------------------- AI PROJECTIONS -------------------------------
-# ----------------------------------------------------------------------
-def ai_projections(df_net, horizon=24):
-    if len(df_net) < 3:
-        return None, None, None, None, None
-    df = df_net.copy().dropna(subset=['value'])
-    if len(df) < 3:
-        return None, None, None, None, None
-
-    df['t'] = range(len(df))
-    y = df['value'].values
-    X = df['t'].values.reshape(-1, 1)
-
-    try:
-        model = ARIMA(y, order=(1,1,1)).fit()
-        f = model.get_forecast(steps=horizon)
-        forecast = f.predicted_mean
-        ci = f.conf_int(alpha=0.05)
-        lower, upper = ci.iloc[:, 0], ci.iloc[:, 1]
-    except:
-        forecast = np.full(horizon, y[-1] * (1 + 0.10))
-        lower = np.full(horizon, y[-1] * 0.9)
-        upper = np.full(horizon, y[-1] * 1.3)
-
-    lr = LinearRegression().fit(X, y)
-    lr_pred = lr.predict(np.arange(len(df), len(df)+horizon).reshape(-1, 1))
-
-    rf = RandomForestRegressor(n_estimators=100, max_depth=3, random_state=42).fit(X, y)
-    rf_pred = rf.predict(np.arange(len(df), len(df)+horizon).reshape(-1, 1))
-
-    return forecast, lower, upper, lr_pred, rf_pred
-# ----------------------------------------------------------------------
-# ----------------------- PROJECTION CONE ------------------------------
+# ----------------------- PROJECTION CONE (FULLY FIXED) ----------------
 # ----------------------------------------------------------------------
 def calculate_projection_cone(df_net, target_amount, target_year=2042):
     """
     Calculate 3 projection lines to retirement:
     1. Conservative (S&P 500 historical: 7% annual)
     2. Current Pace (your actual average monthly growth)
-    3. Optimistic (what you need to exceed goal)
+    3. Optimistic (1.5x current pace)
     """
     if df_net.empty or len(df_net) < 2:
         return None, None, None, None
@@ -544,7 +507,7 @@ def calculate_projection_cone(df_net, target_amount, target_year=2042):
     current_date = df_net['date'].iloc[-1]
     
     # Calculate months to retirement
-    months_to_retirement = (target_year - current_date.year) * 12 - current_date.month
+    months_to_retirement = (target_year - current_date.year) * 12 + (12 - current_date.month)
     if months_to_retirement <= 0:
         return None, None, None, None
     
@@ -561,7 +524,6 @@ def calculate_projection_cone(df_net, target_amount, target_year=2042):
     conservative = [current_value * ((1 + sp500_monthly_rate) ** (i + 1)) for i in range(months_to_retirement)]
     
     # 2. CURRENT PACE: Calculate actual historical growth rate
-    # Use ALL monthly data, not just quarters
     df_sorted = df_net.sort_values('date').copy()
     
     # Calculate total time period in years
@@ -569,18 +531,31 @@ def calculate_projection_cone(df_net, target_amount, target_year=2042):
     end_date = df_sorted['date'].iloc[-1]
     years_elapsed = (end_date - start_date).days / 365.25
     
-    if years_elapsed > 0:
-        start_value = df_sorted['value'].iloc[0]
-        end_value = df_sorted['value'].iloc[-1]
-        
-def calculate_confidence_score_fixed(df_net, target_amount, target_year=2042):
+    if years_elapsed > 0 and df_sorted['value'].iloc[0] > 0:
+        historical_cagr = (current_value / df_sorted['value'].iloc[0]) ** (1 / years_elapsed) - 1
+    else:
+        historical_cagr = 0.07  # fallback to S&P
+    
+    current_monthly_rate = (1 + historical_cagr) ** (1/12) - 1
+    current_pace = [current_value * ((1 + current_monthly_rate) ** (i + 1)) for i in range(months_to_retirement)]
+    
+    # 3. OPTIMISTIC: 1.5x current pace
+    optimistic_monthly_rate = (1 + historical_cagr * 1.5) ** (1/12) - 1
+    optimistic = [current_value * ((1 + optimistic_monthly_rate) ** (i + 1)) for i in range(months_to_retirement)]
+    
+    return future_dates, conservative, current_pace, optimistic
+
+# ----------------------------------------------------------------------
+# ----------------------- CONFIDENCE SCORE (FIXED & COMPLETE) ----------
+# ----------------------------------------------------------------------
+def calculate_confidence_score(df_net, target_amount, target_year=2042):
     """Enhanced confidence scoring with better data validation"""
     if df_net.empty or len(df_net) < 2:
         return 50.0, "Insufficient data"
     
     current_value = df_net['value'].iloc[-1]
     current_date = df_net['date'].iloc[-1]
-    months_remaining = (target_year - current_date.year) * 12 - current_date.month
+    months_remaining = (target_year - current_date.year) * 12 + (12 - current_date.month)
     
     if months_remaining <= 0:
         return 100.0 if current_value >= target_amount else 0.0, "At retirement date"
@@ -596,13 +571,12 @@ def calculate_confidence_score_fixed(df_net, target_amount, target_year=2042):
         return 50.0, "Need 6+ months of data for reliable projection"
     
     start_value = df_sorted['value'].iloc[0]
-    end_value = df_sorted['value'].iloc[-1]
     
     # Check for data quality
     if start_value <= 0:
         return 50.0, "Invalid starting value"
     
-    cagr = (end_value / start_value) ** (1 / years_elapsed) - 1
+    cagr = (current_value / start_value) ** (1 / years_elapsed) - 1
     
     # Cap extreme CAGRs
     cagr = max(-0.5, min(0.5, cagr))
@@ -652,6 +626,9 @@ def calculate_confidence_score_fixed(df_net, target_amount, target_year=2042):
     
     return round(confidence, 1), method
 
+# ----------------------------------------------------------------------
+# ----------------------- DATA QUALITY VALIDATION ----------------------
+# ----------------------------------------------------------------------
 def validate_monthly_data(df):
     """Check for common data issues"""
     issues = []
@@ -683,6 +660,7 @@ def validate_monthly_data(df):
                 issues.append(f"{person}: Found {len(gaps)} gaps in monthly data")
     
     return issues
+
 # --------------------------- UI ---------------------------------------
 st.set_page_config(page_title="S.A.G.E. | Strategic Asset Growth Engine", layout="wide")
 
@@ -724,6 +702,9 @@ if not df.empty:
     if not df_net.empty:
         df_net["date"] = df_net["date"].dt.tz_localize(None)
 
+# ------------------------------------------------------------------
+# DEBUG SECTION (FULLY PRESERVED)
+# ------------------------------------------------------------------
 if not df.empty:
     st.markdown("### 🔍 DEBUG: Database Contents")
     
@@ -757,7 +738,7 @@ if not df.empty:
 # ------------------------------------------------------------------
 # --------------------- TOP RETIREMENT GOAL -------------------------
 # ------------------------------------------------------------------
-if not df.empty:
+if not df.empty and not df_net.empty:
     cur_total = df_net["value"].iloc[-1]
     retirement_target = get_retirement_goal()
     progress_pct = (cur_total / retirement_target) * 100
@@ -776,7 +757,6 @@ if not df.empty:
     with col3:
         st.metric("Progress", f"{progress_pct:.1f}%")
     with col4:
-        # Color code confidence
         if confidence >= 80:
             st.metric("Confidence", f"{confidence:.0f}%", delta="On track", delta_color="normal")
         elif confidence >= 60:
@@ -815,10 +795,11 @@ if not df.empty:
         st.rerun()
     
     st.markdown("---")
+
 # ------------------------------------------------------------------
 # --------------------- TOP SUMMARY + YTD ---------------------------
 # ------------------------------------------------------------------
-if not df.empty:
+if not df.empty and not df_net.empty:
     cur_total = df_net["value"].iloc[-1]
     pct, vs = peer_benchmark(cur_total)
     st.markdown(f"# ${cur_total:,.0f}")
@@ -1039,21 +1020,17 @@ with st.sidebar:
         add_monthly_update(date_in, person, acct, float(val))
         st.success("Saved!")
         st.rerun()
-def add_data_quality_check():
-    """Add to sidebar for data validation"""
+
+    # Data quality check
     with st.expander("Data Quality Check", expanded=False):
         if st.button("Run Validation"):
-            df = get_monthly_updates()
-            if not df.empty:
-                issues = validate_monthly_data(df)
-                if issues:
-                    st.warning("Data quality issues found:")
-                    for issue in issues:
-                        st.write(f"• {issue}")
-                else:
-                    st.success("✅ No data quality issues detected!")
+            issues = validate_monthly_data(df)
+            if issues:
+                st.warning("Data quality issues found:")
+                for issue in issues:
+                    st.write(f"• {issue}")
             else:
-                st.info("No data to validate yet")
+                st.success("✅ No data quality issues detected!")
 
 # ------------------------------------------------------------------
 # PAGE ROUTING
@@ -1076,7 +1053,7 @@ if st.session_state.page == "ai":
     else:
         try:
             genai.configure(api_key=api_key)
-            model = genai.GenerativeModel('gemini-2.5-flash', system_instruction=SYSTEM_PROMPT)
+            model = genai.GenerativeModel('gemini-1.5-flash', system_instruction=SYSTEM_PROMPT)
             formatted_history = [
                 {"role": m["role"], "parts": [m["content"]]} 
                 for m in st.session_state.ai_messages 
@@ -1088,10 +1065,8 @@ if st.session_state.page == "ai":
             st.error(f"AI init failed: {e}")
             st.stop()
 
-        # Check if we need to generate a fresh analysis
+        # Auto-generate initial analysis if needed
         should_analyze = False
-        
-        # Only trigger analysis if: no messages yet AND portfolio is uploaded AND we have net worth data
         if not st.session_state.ai_messages and not df_port.empty and not df_net.empty:
             should_analyze = True
         
@@ -1100,9 +1075,8 @@ if st.session_state.page == "ai":
                 retirement_target = get_retirement_goal()
                 years_to_retirement = 2042 - datetime.now().year
                 
-                # Calculate current pace projection
                 future_dates, conservative, current_pace, optimistic = calculate_projection_cone(df_net, retirement_target, 2042)
-                projected_2042 = current_pace[-1] if current_pace is not None else 0
+                projected_2042 = current_pace[-1] if current_pace is not None else df_net['value'].iloc[-1]
                 confidence, conf_method = calculate_confidence_score(df_net, retirement_target, 2042)
                 
                 init_prompt = f"""Here's our current situation (as of {datetime.now().strftime('%B %d, %Y')}):
@@ -1128,20 +1102,17 @@ if st.session_state.page == "ai":
 Give me your analysis: Are we on track? Any red flags? What should we focus on?"""
                 
                 with st.spinner("S.A.G.E. is analyzing your full picture..."):
-                    try:
-                        response = chat.send_message(init_prompt)
-                        reply = response.text
-                        
-                        st.session_state.ai_messages.append({"role": "user", "content": init_prompt, "timestamp": datetime.now().isoformat()})
-                        save_ai_message("user", init_prompt)
-                        st.session_state.ai_messages.append({"role": "model", "content": reply, "timestamp": datetime.now().isoformat()})
-                        save_ai_message("model", reply)
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Failed to get AI response: {e}")
-                        st.info("You can still chat with S.A.G.E. using the input below.")
+                    response = chat.send_message(init_prompt)
+                    reply = response.text
+                    
+                    st.session_state.ai_messages.append({"role": "user", "content": init_prompt})
+                    save_ai_message("user", init_prompt)
+                    st.session_state.ai_messages.append({"role": "model", "content": reply})
+                    save_ai_message("model", reply)
+                    st.rerun()
             except Exception as e:
-                st.error(f"Failed to prepare analysis: {e}")
+                st.error(f"Failed to get AI response: {e}")
+                st.info("You can still chat with S.A.G.E. using the input below.")
         
         # Display chat history
         for msg in st.session_state.ai_messages:
@@ -1167,59 +1138,20 @@ Give me your analysis: Are we on track? Any red flags? What should we focus on?"
     if st.button("Back to Dashboard"):
         st.session_state.page = "home"
         st.rerun()
-def build_ai_context(df_net, df_port, port_summary):
-    """Build comprehensive context for AI analysis"""
-    retirement_target = get_retirement_goal()
-    current_value = df_net['value'].iloc[-1]
-    
-    # Calculate key metrics safely
-    df_sorted = df_net.sort_values('date')
-    years_elapsed = (df_sorted['date'].iloc[-1] - df_sorted['date'].iloc[0]).days / 365.25
-    
-    context = {
-        'current_value': current_value,
-        'target': retirement_target,
-        'progress_pct': (current_value / retirement_target) * 100,
-        'years_to_retirement': 2042 - datetime.now().year,
-        'data_quality': {
-            'months_of_data': len(df_net),
-            'years_tracked': round(years_elapsed, 1),
-            'earliest_date': df_sorted['date'].iloc[0].strftime('%Y-%m-%d'),
-            'latest_date': df_sorted['date'].iloc[-1].strftime('%Y-%m-%d')
-        }
-    }
-    
-    # Only add CAGR if we have enough data
-    if years_elapsed >= 0.5:
-        start_value = df_sorted['value'].iloc[0]
-        cagr = (current_value / start_value) ** (1 / years_elapsed) - 1
-        context['historical_cagr'] = round(cagr * 100, 2)
-    
-    # Portfolio metrics
-    if not df_port.empty:
-        context['portfolio'] = {
-            'holdings_count': len(df_port),
-            'total_value': port_summary.get('total_value', 0),
-            'total_gain_pct': port_summary.get('total_gain_pct', 0),
-            'top_holding': port_summary.get('top_holding', 'N/A'),
-            'top_allocation_pct': port_summary.get('top_allocation', 0)
-        }
-    
-    return context
-# ------------------- HOME DASHBOARD (YOUR FULL BEAUTIFUL VERSION) -------------------
+
+# ------------------- HOME DASHBOARD -------------------
 else:
     if df.empty:
         st.info("Upload your Fidelity CSV and add a monthly update. S.A.G.E. is ready when you are.")
         st.stop()
 
-tab1, tab2 = st.tabs(["Retirement (Sean + Kim)", "Taylor's Nest Egg"])
+    tab1, tab2 = st.tabs(["Retirement (Sean + Kim)", "Taylor's Nest Egg"])
 
-with tab1:
+    with tab1:
         # Sean + Kim wealth journey graph
         df_pivot = df.pivot_table(index="date", columns="person", values="value", aggfunc="sum") \
                       .resample("ME").last().ffill().fillna(0)
         
-        # Only Sean + Kim for this tab
         df_sean_kim = df_pivot[['Sean', 'Kim']].copy() if 'Sean' in df_pivot.columns and 'Kim' in df_pivot.columns else df_pivot
         df_sean_kim["Sean + Kim"] = df_sean_kim.get("Sean", 0) + df_sean_kim.get("Kim", 0)
 
@@ -1250,19 +1182,15 @@ with tab1:
         st.markdown("---")
         st.markdown("## 📈 Month-over-Month Analysis")
         
-        # Calculate MoM changes ($ and %)
         mom_dollar = df_sean_kim.diff().round(0)
         mom_pct = df_sean_kim.pct_change() * 100
         
-        # Get available years
         available_years = sorted(df_sean_kim.index.year.unique(), reverse=True)
         
-        # Create tabs for each year
         year_tabs = st.tabs([str(year) for year in available_years])
         
         for year_tab, year in zip(year_tabs, available_years):
             with year_tab:
-                # Filter data for this year
                 year_mask = df_sean_kim.index.year == year
                 year_data_dollar = mom_dollar[year_mask]
                 year_data_pct = mom_pct[year_mask]
@@ -1271,7 +1199,6 @@ with tab1:
                     st.info(f"No data for {year}")
                     continue
                 
-                # Build display DataFrame
                 display_data = []
                 for date in year_data_dollar.index:
                     row = {'Date': date.strftime('%b %Y')}
@@ -1292,15 +1219,13 @@ with tab1:
                 
                 df_display = pd.DataFrame(display_data)
                 
-                # Style function for color coding
                 def color_negative_red(val):
                     if isinstance(val, (int, float)):
                         color = '#90EE90' if val > 0 else ('#FF6B6B' if val < 0 else 'white')
                         return f'background-color: {color}; color: black'
                     return ''
                 
-                # Apply styling
-                styled_df = df_display.style.applymap(
+                styled_df = df_display.style.map(
                     color_negative_red,
                     subset=[col for col in df_display.columns if col != 'Date']
                 ).format({
@@ -1313,7 +1238,6 @@ with tab1:
         st.markdown("---")
         st.markdown("## 📅 Year-over-Year (December to December)")
         
-        # Get December data for each year
         december_data = df_sean_kim[df_sean_kim.index.month == 12].copy()
         
         if len(december_data) >= 2:
@@ -1345,8 +1269,7 @@ with tab1:
             
             df_yoy = pd.DataFrame(yoy_data)
             
-            # Style YoY data
-            styled_yoy = df_yoy.style.applymap(
+            styled_yoy = df_yoy.style.map(
                 color_negative_red,
                 subset=[col for col in df_yoy.columns if col != 'Period']
             ).format({
@@ -1358,7 +1281,7 @@ with tab1:
         else:
             st.info("Need at least 2 years of December data for YoY comparison")
 
-with tab2:
+    with tab2:
         st.markdown("# 💎 Taylor's Nest Egg")
         st.caption("Building long-term wealth for Taylor's future")
         
@@ -1369,7 +1292,6 @@ with tab2:
             taylor_start = taylor_df["value"].iloc[0]
             taylor_growth = ((taylor_current / taylor_start) - 1) * 100 if taylor_start > 0 else 0
             
-            # Calculate Taylor's CAGR
             taylor_start_date = taylor_df['date'].iloc[0]
             taylor_end_date = taylor_df['date'].iloc[-1]
             taylor_years = (taylor_end_date - taylor_start_date).days / 365.25
@@ -1384,7 +1306,6 @@ with tab2:
             col2.metric("Total Growth", f"{taylor_growth:+.1f}%")
             col3.metric("Annual Growth Rate (CAGR)", f"{taylor_cagr:.1f}%")
             
-            # Taylor's growth chart
             fig_taylor = go.Figure()
             fig_taylor.add_trace(go.Scatter(
                 x=taylor_df["date"],
@@ -1408,12 +1329,10 @@ with tab2:
             st.markdown("---")
             st.markdown("## 📊 Taylor's Month-over-Month")
             
-  # Taylor MoM table
             taylor_pivot = taylor_df.set_index('date')['value'].resample('ME').last().to_frame()
             taylor_mom_dollar = taylor_pivot.diff().round(0)
             taylor_mom_pct = taylor_pivot.pct_change() * 100
             
-            # Get Taylor's years
             taylor_years = sorted(taylor_pivot.index.year.unique(), reverse=True)
             taylor_year_tabs = st.tabs([str(year) for year in taylor_years])
             
@@ -1451,29 +1370,26 @@ with tab2:
                             return f'background-color: {color}; color: black'
                         return ''
                     
-                    # Only apply styling if we have the columns
-                    if 'Change $' in df_taylor_display.columns and 'Change %' in df_taylor_display.columns:
-                        styled_taylor = df_taylor_display.style.map(
-                            color_negative_red,
-                            subset=['Change $', 'Change %']
-                        ).format({
-                            'Change $': '${:,.0f}',
-                            'Change %': '{:+.2f}%'
-                        })
-                        st.dataframe(styled_taylor, use_container_width=True)
-                    else:
-                        # If columns are missing, just display without styling
-                        st.dataframe(df_taylor_display, use_container_width=True)
+                    styled_taylor = df_taylor_display.style.map(
+                        color_negative_red,
+                        subset=['Change $', 'Change %']
+                    ).format({
+                        'Change $': '${:,.0f}',
+                        'Change %': '{:+.2f}%'
+                    })
+                    st.dataframe(styled_taylor, use_container_width=True)
             
             st.markdown("---")
             st.markdown("### 🎯 Long-Term Outlook for Taylor")
+            # Dynamic age estimate (born ~early 2021)
+            taylor_age_approx = datetime.now().year - 2021 + (1 if datetime.now().month >= 1 else 0)
             st.info(f"""
-            **Taylor is {2025 - 2021} years old.** Time is her greatest asset.
+            **Taylor is approximately {taylor_age_approx} years old.** Time is her greatest asset.
             
             At her current growth rate of {taylor_cagr:.1f}% annually:
-            - By age 18 (2039): ~${taylor_current * ((1 + taylor_cagr/100) ** 14):,.0f}
-            - By age 30 (2051): ~${taylor_current * ((1 + taylor_cagr/100) ** 26):,.0f}
-            - By age 40 (2061): ~${taylor_current * ((1 + taylor_cagr/100) ** 36):,.0f}
+            - By age 18 (2039): ~${taylor_current * ((1 + taylor_cagr/100) ** (2039 - datetime.now().year)) :,.0f}
+            - By age 30 (2051): ~${taylor_current * ((1 + taylor_cagr/100) ** (2051 - datetime.now().year)) :,.0f}
+            - By age 40 (2061): ~${taylor_current * ((1 + taylor_cagr/100) ** (2061 - datetime.now().year)) :,.0f}
             
             Let compounding work its magic. 🚀
             """)
@@ -1482,8 +1398,8 @@ with tab2:
             st.info("No data for Taylor yet. Add her first monthly update to get started!")
 
 st.download_button(
-        "Export All Monthly Data",
-        df.to_csv(index=False).encode(),
-        f"sage-data-{datetime.now().strftime('%Y-%m-%d')}.csv",
-        "text/csv"
-    )
+    "Export All Monthly Data",
+    df.to_csv(index=False).encode(),
+    f"sage-data-{datetime.now().strftime('%Y-%m-%d')}.csv",
+    "text/csv"
+)
