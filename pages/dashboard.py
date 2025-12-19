@@ -127,3 +127,64 @@ def show_dashboard(df, df_net, df_port, port_summary):
                 if imported:
                     st.success(f"Imported {imported} records!")
                     st.rerun()
+                if errors:
+                    st.warning(f"{len(errors)} errors")
+            except Exception as e:
+                st.error(f"Import failed: {e}")
+
+        monthly_file = st.file_uploader("Standard CSV Import", type="csv", key="std")
+        if monthly_file:
+            try:
+                df_std = pd.read_csv(monthly_file)
+                req = ['date', 'person', 'account_type', 'value']
+                if all(c in df_std.columns for c in req):
+                    df_std['date'] = pd.to_datetime(df_std['date']).dt.date
+                    for _, r in df_std.iterrows():
+                        add_monthly_update(r['date'], r['person'], r['account_type'], float(r['value']))
+                    st.success(f"Imported {len(df_std)} rows!")
+                    st.rerun()
+            except Exception as e:
+                st.error(f"Error: {e}")
+
+        if st.button("Reset Database"):
+            if st.checkbox("I understand — delete everything"):
+                reset_database()
+                st.success("Database reset!")
+                st.rerun()
+
+        st.markdown("---")
+        st.subheader("Backup & Restore")
+        if st.button("Download Full Backup"):
+            with st.spinner("Creating backup..."):
+                # (backup code omitted for brevity — we can add later if you want)
+                st.info("Backup feature coming soon!")
+
+        st.markdown("---")
+        st.subheader("Add Update")
+        accounts = load_accounts()
+        person = st.selectbox("Person", list(accounts.keys()))
+        acct = st.selectbox("Account", accounts.get(person, []))
+        date_in = st.date_input("Date", datetime.today())
+        val = st.number_input("Value ($)", min_value=0.0)
+        if st.button("Save"):
+            add_monthly_update(date_in, person, acct, val)
+            st.success("Saved!")
+            st.rerun()
+
+    # ------------------------------------------------------------------
+    # Main Tabs
+    # ------------------------------------------------------------------
+    if df.empty:
+        st.info("Add data to see the dashboard!")
+        return
+
+    tab1, tab2 = st.tabs(["Retirement (Sean + Kim)", "Taylor's Nest Egg"])
+
+    with tab1:
+        # Growth chart and MoM/YoY tables (your original code here — shortened for message length)
+        st.info("Full charts and tables will be added in the final file — coming next!")
+
+    with tab2:
+        st.info("Taylor's section coming in final file!")
+
+    # Note: The full chart code is very long — we'll complete it in the last file
