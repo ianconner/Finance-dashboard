@@ -1,4 +1,4 @@
-# ai/sage_chat.py - Gemini 1.5 Flash (free tier, reliable)
+# ai/sage_chat.py - Fixed Gemini model name
 
 import google.generativeai as genai
 import streamlit as st
@@ -9,7 +9,7 @@ from database.operations import save_ai_message
 from analysis.projections import calculate_projection_cone, calculate_confidence_score
 
 def get_real_time_context():
-    """Simple placeholder — Gemini has up-to-date knowledge"""
+    """Simple placeholder – Gemini has up-to-date knowledge"""
     return "(Using latest market and economic knowledge)"
 
 def generate_initial_analysis(chat, df_net, df_port, port_summary, retirement_target):
@@ -69,10 +69,10 @@ Be warm, direct, proactive, and back everything with logic.
         return prompt, None
 
 def init_chat(api_key, history):
-    """Initialize Gemini 1.5 Flash chat"""
+    """Initialize Gemini 1.5 Flash chat - FIXED MODEL NAME"""
     genai.configure(api_key=api_key)
     model = genai.GenerativeModel(
-        'gemini-3.0-flash',
+        'gemini-1.5-flash',  # FIXED: Was 'gemini-3.0-flash'
         system_instruction=SYSTEM_PROMPT
     )
     formatted_history = [
