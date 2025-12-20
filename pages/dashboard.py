@@ -1,21 +1,18 @@
-# pages/dashboard.py
+# pages/dashboard.py - Full dashboard with multi-portfolio support
 
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 from datetime import datetime
 import base64
-import subprocess
-from tempfile import NamedTemporaryFile
-import os
 
 from config.constants import peer_benchmark
 from database.operations import (
     load_accounts, add_monthly_update, reset_database,
     get_retirement_goal, set_retirement_goal,
-    save_portfolio_csv
+    save_portfolio_csv_slot, load_all_portfolios
 )
-from data.parser import parse_portfolio_csv
+from data.parser import parse_portfolio_csv, merge_portfolios
 from data.importers import import_excel_format
 from analysis.projections import calculate_confidence_score
 
@@ -105,17 +102,15 @@ def show_dashboard(df, df_net, df_port, port_summary):
 
         st.markdown("---")
 
-      # ------------------------------------------------------------------
-    # Sidebar
+    # ------------------------------------------------------------------
+    # Sidebar - Multi-Portfolio Upload
     # ------------------------------------------------------------------
     with st.sidebar:
         with st.expander("S.A.G.E. – Your Strategic Partner", expanded=True):
             st.subheader("Upload Portfolio CSVs (up to 3 accounts)")
-            st.caption("Upload from different brokers/accounts — S.A.G.E. combines them automatically")
+            st.caption("Upload from different brokers/accounts — S.A.G.E. combines them")
 
             col1, col2, col3 = st.columns(3)
-
-            portfolios_changed = False
 
             with col1:
                 port_file1 = st.file_uploader("Account 1", type="csv", key="port1")
@@ -125,7 +120,6 @@ def show_dashboard(df, df_net, df_port, port_summary):
                         csv_b64 = base64.b64encode(port_file1.getvalue()).decode()
                         save_portfolio_csv_slot(1, csv_b64)
                         st.success(f"Account 1: ${temp_summary['total_value']:,.0f}")
-                        portfolios_changed = True
 
             with col2:
                 port_file2 = st.file_uploader("Account 2 (optional)", type="csv", key="port2")
@@ -135,7 +129,6 @@ def show_dashboard(df, df_net, df_port, port_summary):
                         csv_b64 = base64.b64encode(port_file2.getvalue()).decode()
                         save_portfolio_csv_slot(2, csv_b64)
                         st.success(f"Account 2: ${temp_summary['total_value']:,.0f}")
-                        portfolios_changed = True
 
             with col3:
                 port_file3 = st.file_uploader("Account 3 (optional)", type="csv", key="port3")
@@ -145,7 +138,6 @@ def show_dashboard(df, df_net, df_port, port_summary):
                         csv_b64 = base64.b64encode(port_file3.getvalue()).decode()
                         save_portfolio_csv_slot(3, csv_b64)
                         st.success(f"Account 3: ${temp_summary['total_value']:,.0f}")
-                        portfolios_changed = True
 
             # Load and merge all saved portfolios
             all_b64 = load_all_portfolios()
@@ -158,7 +150,7 @@ def show_dashboard(df, df_net, df_port, port_summary):
                     if not df_slot.empty:
                         portfolio_dfs.append(df_slot)
                 except Exception as e:
-                    st.error(f"Error loading saved portfolio {slot}: {e}")
+                    st.error(f"Error loading saved portfolio {slot}")
 
             if portfolio_dfs:
                 df_port, port_summary = merge_portfolios(portfolio_dfs)
@@ -172,29 +164,20 @@ def show_dashboard(df, df_net, df_port, port_summary):
                 st.session_state.page = "ai"
                 st.rerun()
 
-        # ... rest of sidebar (Data Tools, Add Update, etc.) remains unchanged
-
         st.markdown("---")
         st.subheader("Data Tools")
         
         st.markdown("**Bulk Import - Excel Format**")
-        excel_file = st.file_uploader(
-            "Upload historical Excel data",
-            type=["csv", "xlsx"],
-            key="excel_import"
-        )
+        excel_file = st.file_uploader("Upload historical Excel data", type=["csv", "xlsx"], key="excel_import")
         if excel_file:
             try:
-                if excel_file.name.endswith('.xlsx'):
-                    df_import = pd.read_excel(excel_file)
-                else:
-                    df_import = pd.read_csv(excel_file)
+                df_import = pd.read_excel(excel_file) if excel_file.name.endswith('.xlsx') else pd.read_csv(excel_file)
                 imported, errors = import_excel_format(df_import)
                 if imported > 0:
                     st.success(f"Imported {imported} records!")
                     st.rerun()
                 if errors:
-                    st.warning(f"{len(errors)} errors — check format")
+                    st.warning(f"{len(errors)} errors")
             except Exception as e:
                 st.error(f"Import failed: {e}")
 
@@ -235,10 +218,10 @@ def show_dashboard(df, df_net, df_port, port_summary):
             st.rerun()
 
     # ------------------------------------------------------------------
-    # Main Content Tabs
+    # Main Tabs - Charts & Tables
     # ------------------------------------------------------------------
     if df.empty:
-        st.info("Upload your Fidelity CSV and add monthly updates to begin.")
+        st.info("Add data to see the full dashboard.")
         return
 
     tab1, tab2 = st.tabs(["Retirement (Sean + Kim)", "💎 Taylor's Nest Egg"])
@@ -248,7 +231,7 @@ def show_dashboard(df, df_net, df_port, port_summary):
         df_pivot = df.pivot_table(index="date", columns="person", values="value", aggfunc="sum") \
                       .resample("ME").last().ffill().fillna(0)
         
-        df_sean_kim = df_pivot[['Sean', 'Kim']].copy() if 'Sean' in df_pivot and 'Kim' in df_pivot else df_pivot
+        df_sean_kim = df_pivot[['Sean', 'Kim']].copy() if 'Sean' in df_pivot.columns and 'Kim' in df_pivot.columns else df_pivot
         df_sean_kim["Sean + Kim"] = df_sean_kim.get("Sean", 0) + df_sean_kim.get("Kim", 0)
 
         fig = go.Figure()
@@ -345,25 +328,27 @@ def show_dashboard(df, df_net, df_port, port_summary):
             fig_t = go.Figure(go.Scatter(
                 x=taylor_df["date"], y=taylor_df["value"],
                 line=dict(color="#00CC96", width=3),
-                fill='tozeroy', fillcolor='rgba(0,204,150,0.1)'
+                fill='tozeroy', fillcolor='rgba(0,204,150,0.1)',
+                hovertemplate="<b>Taylor</b><br>%{x|%b %Y}: $%{y:,.0f}<extra></extra>"
             ))
             fig_t.update_layout(title="Taylor's Portfolio Growth Over Time", height=500)
             st.plotly_chart(fig_t, use_container_width=True)
 
+            st.markdown("---")
             st.markdown("### 🎯 Long-Term Outlook for Taylor")
             taylor_age = datetime.now().year - 2021
             st.info(f"""
             **Taylor is approximately {taylor_age} years old.** Time is her superpower.
             
             At {cagr:.1f}% CAGR:
-            - Age 18 (2039): ~${current * ((1 + cagr/100) ** (2039 - datetime.now().year)) :,.0f}
-            - Age 30 (2051): ~${current * ((1 + cagr/100) ** (2051 - datetime.now().year)) :,.0f}
-            - Age 40 (2061): ~${current * ((1 + cagr/100) ** (2061 - datetime.now().year)) :,.0f}
+            - Age 18 (2039): ~${current * ((1 + cagr/100) ** (2039 - datetime.now().year)):,.0f}
+            - Age 30 (2051): ~${current * ((1 + cagr/100) ** (2051 - datetime.now().year)):,.0f}
+            - Age 40 (2061): ~${current * ((1 + cagr/100) ** (2061 - datetime.now().year)):,.0f}
             
             Let compounding work its magic. 🚀
             """)
 
-            # Taylor MoM tables (same as original)
+            # Taylor MoM tables
             taylor_pivot = taylor_df.set_index('date')['value'].resample('ME').last().to_frame()
             taylor_mom_dollar = taylor_pivot.diff().round(0)
             taylor_mom_pct = taylor_pivot.pct_change() * 100
