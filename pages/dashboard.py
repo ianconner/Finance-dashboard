@@ -125,7 +125,7 @@ def show_dashboard(df, df_net, df_port, port_summary):
             if df_port.empty:
                 st.caption("Upload portfolio CSV to enable full analysis")
             
-            if st.button("🧠 Talk to S.A.G.E.", use_container_width=True, disabled=df_port.empty):
+           if st.button("🧠 Talk to S.A.G.E.", use_container_width=True):
                 st.session_state.page = "ai"
                 st.rerun()
 
