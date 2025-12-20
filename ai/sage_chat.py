@@ -29,6 +29,10 @@ def generate_initial_analysis(chat, df_net, df_port, port_summary, retirement_ta
     
     real_time = get_real_time_context()
     
+    # Safe string formatting
+    conservative_str = f"${conservative_2042:,.0f}" if isinstance(conservative_2042, (int, float)) else str(conservative_2042)
+    optimistic_str = f"${optimistic_2042:,.0f}" if isinstance(optimistic_2042, (int, float)) else str(optimistic_2042)
+
     prompt = f"""
 Current date: {datetime.now().strftime('%B %d, %Y')}
 
@@ -38,9 +42,9 @@ PROGRESS: {progress:.1f}%
 CONFIDENCE: {confidence:.0f}% ({conf_method})
 
 PROJECTIONS TO 2042:
-- Conservative (7% real): ${conservative_2042:,.0f if isinstance(conservative_2042, (int, float)) else conservative_2042}
+- Conservative (7% real): {conservative_str}
 - Current Pace: ${projected_2042:,.0f}
-- Optimistic (1.5x pace): ${optimistic_2042:,.0f if isinstance(optimistic_2042, (int, float)) else optimistic_2042}
+- Optimistic (1.5x pace): {optimistic_str}
 
 PORTFOLIO SNAPSHOT:
 - Holdings: {len(df_port)} positions
@@ -70,14 +74,12 @@ Be my best-friend financial genius: warm, direct, proactive, and back everything
         return prompt, None
 
 def init_chat(api_key, history):
-    """Initialize Gemini chat"""
     genai.configure(api_key=api_key)
     model = genai.GenerativeModel('gemini-1.5-pro', system_instruction=SYSTEM_PROMPT)
     formatted = [{"role": m["role"], "parts": [m["content"]]} for m in history]
     return model.start_chat(history=formatted)
 
 def send_message(chat, user_input):
-    """Send user message and get response"""
     try:
         response = chat.send_message(user_input)
         return response.text
