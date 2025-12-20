@@ -24,19 +24,31 @@ def show_ai_chat_page(df, df_net, df_port, port_summary):
     chat = st.session_state.sage_chat
     retirement_target = st.session_state.get("retirement_goal", 1000000.0)
 
-    # New Conversation Button
-    col1, col2 = st.columns([6, 1])
+        # Header with buttons
+    col1, col2, col3 = st.columns([5, 2, 2])
     with col1:
-        st.write(f"**Goal:** ${retirement_target:,.0f} by 2042")
+        st.markdown(f"**Retirement Goal:** ${retirement_target:,.0f} by 2042")
     with col2:
-        if st.button("🗑️ New Conversation"):
+        if st.button("🔄 Run Full Analysis", use_container_width=True, type="primary"):
+            with st.spinner("S.A.G.E. is running a fresh full review..."):
+                user_prompt, reply = generate_initial_analysis(
+                    chat, df_net, df_port, port_summary, retirement_target
+                )
+                if reply:
+                    st.session_state.ai_messages.append({"role": "user", "content": "[Full Analysis Requested]\n\n" + user_prompt})
+                    save_ai_message("user", user_prompt)
+                    st.session_state.ai_messages.append({"role": "model", "content": reply})
+                    save_ai_message("model", reply)
+                    st.rerun()
+    with col3:
+        if st.button("🗑️ New Conversation", use_container_width=True):
             st.session_state.ai_messages = []
             st.session_state.sage_chat = init_chat(api_key, [])
-            from database.operations import get_session
             sess = get_session()
-            sess.query(type('AIChat', (), {})).delete()  # clear DB history
+            sess.query(AIChat).delete()
             sess.commit()
             sess.close()
+            st.success("Started fresh conversation!")
             st.rerun()
 
     # Auto deep analysis on first load
