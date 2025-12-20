@@ -42,7 +42,7 @@ def show_ai_chat_page(df, df_net, df_port, port_summary):
     # Auto deep analysis on first load
     if not st.session_state.ai_messages and not df_net.empty:
         with st.spinner("S.A.G.E. is running a full strategic review..."):
-            user_prompt, reply = generate_comprehensive_analysis(
+            user_prompt, reply = generate_initial_analysis(
                 chat, df_net, df_port, port_summary, retirement_target
             )
             if reply:
