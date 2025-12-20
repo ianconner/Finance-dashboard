@@ -8,6 +8,7 @@ import json
 from config.constants import SYSTEM_PROMPT
 from database.operations import save_ai_message, load_ai_history
 from analysis.projections import calculate_projection_cone, calculate_confidence_score
+from ai.sage_chat import init_chat, send_message
 
 # ------------------------------------------------------------------
 # Tool: Real-time news & events (web search + browse)
