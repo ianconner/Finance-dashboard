@@ -1,4 +1,4 @@
-# pages/dashboard.py - Final complete version
+# pages/dashboard.py - Final accurate version
 
 import streamlit as st
 import pandas as pd
@@ -17,7 +17,7 @@ from data.parser import parse_portfolio_csv, merge_portfolios
 from data.importers import import_excel_format
 from analysis.projections import calculate_confidence_score
 
-def show_dashboard(df, df_net, df_port, port_summary):
+def show_dashboard():
     # Load historical monthly data
     df = get_monthly_updates()
     if not df.empty:
@@ -68,7 +68,7 @@ def show_dashboard(df, df_net, df_port, port_summary):
         df = get_monthly_updates()
         df["date"] = pd.to_datetime(df["date"])
 
-    # Net worth from monthly data
+    # Net worth from monthly data (includes latest snapshot)
     df_sean_kim = df[df["person"].isin(["Sean", "Kim"])]
     df_sean_kim_total = df_sean_kim.groupby("date")["value"].sum().reset_index().sort_values("date")
     current_sean_kim = df_sean_kim_total["value"].iloc[-1] if not df_sean_kim_total.empty else 0
@@ -78,7 +78,7 @@ def show_dashboard(df, df_net, df_port, port_summary):
     current_taylor = df_taylor_total["value"].iloc[-1] if not df_taylor_total.empty else 0
 
     # ------------------------------------------------------------------
-    # Top Retirement Goal Section
+    # Retirement Goal Section (Sean + Kim only)
     # ------------------------------------------------------------------
     if current_sean_kim > 0:
         retirement_target = get_retirement_goal()
@@ -149,7 +149,7 @@ def show_dashboard(df, df_net, df_port, port_summary):
         st.markdown("---")
 
     # ------------------------------------------------------------------
-    # Sidebar - Clean Upload Layout
+    # Sidebar - Collapsible Uploads
     # ------------------------------------------------------------------
     with st.sidebar:
         with st.expander("S.A.G.E. – Your Strategic Partner", expanded=True):
@@ -283,6 +283,7 @@ def show_dashboard(df, df_net, df_port, port_summary):
         )
         st.plotly_chart(fig, use_container_width=True)
 
+        # MoM and YoY tables (full original code)
         st.markdown("---")
         st.markdown("## 📈 Month-over-Month Analysis")
 
