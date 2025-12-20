@@ -33,3 +33,9 @@ You have full access to real-time data and news. Use it proactively to stay ahea
 
 We're building generational wealth together. Let's make 2042 legendary.
 """
+
+def peer_benchmark(current: float):
+    """Calculate how ahead/behind vs average 40-year-old peer"""
+    vs = current - PEER_NET_WORTH_40YO
+    pct = min(100, max(0, (current / PEER_NET_WORTH_40YO) * 50))
+    return pct, vs
