@@ -1,4 +1,4 @@
-# pages/dashboard.py - Final version with auto-snapshot, collapsible uploads, full history
+# pages/dashboard.py - Complete final version with full charts, multi-portfolio, auto-snapshot
 
 import streamlit as st
 import pandas as pd
@@ -45,7 +45,6 @@ def show_dashboard():
     if raw_portfolio_data:
         portfolio_loaded = True
 
-        # Calculate totals by person from Account Name
         for raw_df in raw_portfolio_data:
             for _, row in raw_df.iterrows():
                 account_name = str(row.get('Account Name', ''))
@@ -58,16 +57,15 @@ def show_dashboard():
                 elif 'Taylor' in account_name or 'taylor' in account_name:
                     current_taylor += value
 
-        # Auto-add snapshot to monthly updates (month-end date)
-        snapshot_date = datetime.today().replace(day=1) + pd.offsets.MonthEnd(0)  # end of current month
+        # Auto-add snapshot (month-end date)
+        snapshot_date = datetime.today().replace(day=1) + pd.offsets.MonthEnd(0)
         snapshot_date = snapshot_date.date()
 
-        # Add/update Sean + Kim
-        add_monthly_update(snapshot_date, 'Sean', 'Personal', current_sean_kim)  # using Personal as placeholder
-        # Taylor
+        # Overwrite any existing entry for this month
+        add_monthly_update(snapshot_date, 'Sean', 'Personal', current_sean_kim)
         add_monthly_update(snapshot_date, 'Taylor', 'Personal', current_taylor)
 
-        # Reload df with new snapshot
+        # Reload data with new snapshot
         df = get_monthly_updates()
         df["date"] = pd.to_datetime(df["date"])
 
@@ -88,7 +86,7 @@ def show_dashboard():
         progress_pct = (current_sean_kim / retirement_target) * 100
         years_remaining = 2042 - datetime.now().year
         
-        confidence, confidence_method = calculate_confidence_score(df_sean_kim_total.rename(columns={'value': 'value'}), retirement_target)
+        confidence, confidence_method = calculate_confidence_score(df_sean_kim_total, retirement_target)
         
         st.markdown("# 🎯 RETIREMENT 2042")
         
@@ -107,18 +105,14 @@ def show_dashboard():
             else:
                 st.metric("Confidence", f"{confidence:.0f}%", delta="Action needed", delta_color="inverse")
         
-        if progress_pct >= 100:
-            st.success(f"🎉 Goal achieved! You're at {progress_pct:.1f}% of target!")
-        elif confidence >= 80:
-            st.progress(min(progress_pct / 100, 1.0))
+        st.progress(min(progress_pct / 100, 1.0))
+        if confidence >= 80:
             st.success(f"✅ On track! {years_remaining} years remaining • {confidence:.0f}% confidence")
         elif confidence >= 60:
-            st.progress(min(progress_pct / 100, 1.0))
             st.warning(f"⚠️ Watch closely • {years_remaining} years remaining • {confidence:.0f}% confidence")
         else:
-            st.progress(min(progress_pct / 100, 1.0))
             st.error(f"🚨 Adjustment needed • {years_remaining} years remaining • {confidence:.0f}% confidence")
-        
+
         st.markdown("#### Adjust Retirement Goal")
         new_target = st.slider(
             "Target Amount",
@@ -145,24 +139,31 @@ def show_dashboard():
 
         st.markdown("#### YTD Growth (Jan 1 → Today)")
         current_year = datetime.now().year
-        ytd_df = df[df["date"].dt.year == current_year]
+        ytd_df = df[df["date"].dt.year == current_year].copy()
         if len(ytd_df["date"].unique()) > 1:
-            start_val = ytd_df[ytd_df["date"] == ytd_df["date"].min()]["value"].sum()
-            latest_val = ytd_df[ytd_df["date"] == ytd_df["date"].max()]["value"].sum()
-            ytd_pct = ((latest_val / start_val) - 1) * 100 if start_val > 0 else 0
-            st.metric("Combined YTD", f"{ytd_pct:+.1f}%")
+            start_vals = ytd_df[ytd_df["date"] == ytd_df["date"].min()].groupby("person")["value"].sum()
+            latest_vals = ytd_df[ytd_df["date"] == ytd_df["date"].max()].groupby("person")["value"].sum()
+            ytd_pct = ((latest_vals / start_vals) - 1) * 100
+            combined_ytd = ((latest_vals.get('Sean',0) + latest_vals.get('Kim',0)) / 
+                            (start_vals.get('Sean',1) + start_vals.get('Kim',1)) - 1) * 100 if (start_vals.get('Sean',1) + start_vals.get('Kim',1)) > 0 else 0
+
+            col1, col2, col3, col4 = st.columns(4)
+            col1.metric("**Sean YTD**", f"{ytd_pct.get('Sean', 0):+.1f}%")
+            col2.metric("**Kim YTD**", f"{ytd_pct.get('Kim', 0):+.1f}%")
+            col3.metric("**Taylor YTD**", f"{ytd_pct.get('Taylor', 0):+.1f}%")
+            col4.metric("**Combined YTD**", f"{combined_ytd:+.1f}%")
         else:
             st.info("Not enough data for YTD yet this year.")
 
         st.markdown("---")
 
     # ------------------------------------------------------------------
-    # Sidebar - Collapsible Uploads
+    # Sidebar - Collapsible Multi-Portfolio Upload
     # ------------------------------------------------------------------
     with st.sidebar:
         with st.expander("S.A.G.E. – Your Strategic Partner", expanded=True):
             st.subheader("Upload Portfolio CSVs")
-            st.caption("Upload your Fidelity CSVs — latest upload becomes monthly snapshot")
+            st.caption("Latest upload becomes monthly snapshot")
 
             with st.expander("Account 1"):
                 port_file1 = st.file_uploader("Fidelity CSV", type="csv", key="port1", label_visibility="collapsed")
@@ -192,20 +193,71 @@ def show_dashboard():
                         st.success(f"Account 3: ${temp_summary['total_value']:,.0f}")
 
             if portfolio_loaded:
-                st.success(f"**Latest snapshot saved for {snapshot_date.strftime('%B %Y')}**")
+                st.success(f"**Snapshot saved for {snapshot_date.strftime('%B %Y')}**")
 
             st.caption("Always ready when you are.")
             if st.button("🧠 Talk to S.A.G.E.", use_container_width=True):
                 st.session_state.page = "ai"
                 st.rerun()
 
-        # ... rest of sidebar (Data Tools, Add Update) unchanged
+        st.markdown("---")
+        st.subheader("Data Tools")
+        
+        st.markdown("**Bulk Import - Excel Format**")
+        excel_file = st.file_uploader("Upload historical Excel data", type=["csv", "xlsx"], key="excel_import")
+        if excel_file:
+            try:
+                df_import = pd.read_excel(excel_file) if excel_file.name.endswith('.xlsx') else pd.read_csv(excel_file)
+                imported, errors = import_excel_format(df_import)
+                if imported > 0:
+                    st.success(f"Imported {imported} records!")
+                    st.rerun()
+                if errors:
+                    st.warning(f"{len(errors)} errors")
+            except Exception as e:
+                st.error(f"Import failed: {e}")
+
+        st.markdown("**Standard CSV Import**")
+        monthly_file = st.file_uploader("CSV (date,person,account_type,value)", type="csv", key="monthly")
+        if monthly_file:
+            try:
+                df_std = pd.read_csv(monthly_file)
+                req = ['date', 'person', 'account_type', 'value']
+                if all(c in df_std.columns for c in req):
+                    df_std['date'] = pd.to_datetime(df_std['date']).dt.date
+                    for _, r in df_std.iterrows():
+                        add_monthly_update(r['date'], r['person'], r['account_type'], float(r['value']))
+                    st.success(f"Imported {len(df_std)} rows!")
+                    st.rerun()
+            except Exception as e:
+                st.error(f"Error: {e}")
+
+        if st.button("Reset Database"):
+            if st.checkbox("I understand this deletes all data", key="confirm_reset"):
+                reset_database()
+                st.success("Database reset!")
+                st.rerun()
+
+        st.markdown("---")
+        st.subheader("Add Update")
+        accounts = load_accounts()
+        person = st.selectbox("Person", list(accounts.keys()))
+        acct = st.selectbox("Account", accounts.get(person, []))
+        col1, col2 = st.columns(2)
+        with col1:
+            date_in = st.date_input("Date", value=datetime.today())
+        with col2:
+            val = st.number_input("Value ($)", min_value=0.0)
+        if st.button("Save"):
+            add_monthly_update(date_in, person, acct, float(val))
+            st.success("Saved!")
+            st.rerun()
 
     # ------------------------------------------------------------------
     # Main Tabs - Full Charts & Tables
     # ------------------------------------------------------------------
     if df.empty:
-        st.info("Add data to see charts.")
+        st.info("Add data to see the full dashboard.")
         return
 
     tab1, tab2 = st.tabs(["Retirement (Sean + Kim)", "💎 Taylor's Nest Egg"])
@@ -240,12 +292,121 @@ def show_dashboard():
         )
         st.plotly_chart(fig, use_container_width=True)
 
-        # MoM and YoY tables (same as your original — kept full)
-        # ... (include your original MoM and YoY code here)
+        st.markdown("---")
+        st.markdown("## 📈 Month-over-Month Analysis")
+
+        mom_dollar = df_sean_kim_plot.diff().round(0)
+        mom_pct = df_sean_kim_plot.pct_change() * 100
+        years = sorted(df_sean_kim_plot.index.year.unique(), reverse=True)
+        year_tabs = st.tabs([str(y) for y in years])
+
+        for tab, year in zip(year_tabs, years):
+            with tab:
+                mask = df_sean_kim_plot.index.year == year
+                display_data = []
+                for date in df_sean_kim_plot[mask].index:
+                    row = {'Date': date.strftime('%b %Y')}
+                    for p in ['Sean', 'Kim', 'Sean + Kim']:
+                        if p in df_sean_kim_plot.columns:
+                            row[f'{p} $'] = mom_dollar.loc[date, p] if date in mom_dollar.index else 0
+                            row[f'{p} %'] = mom_pct.loc[date, p] if date in mom_pct.index else 0
+                    display_data.append(row)
+                df_display = pd.DataFrame(display_data)
+
+                def color_val(val):
+                    if isinstance(val, (int, float)):
+                        return 'background-color: #90EE90; color: black' if val > 0 else ('background-color: #FF6B6B; color: black' if val < 0 else '')
+                    return ''
+
+                styled = df_display.style.map(color_val, subset=[c for c in df_display.columns if c != 'Date'])\
+                    .format({c: '${:,.0f}' if '$' in c else '{:+.2f}%' for c in df_display.columns if c != 'Date'})
+                st.dataframe(styled, use_container_width=True)
+
+        st.markdown("---")
+        st.markdown("## 📅 Year-over-Year (December to December)")
+        december_data = df_sean_kim_plot[df_sean_kim_plot.index.month == 12]
+        if len(december_data) >= 2:
+            yoy_data = []
+            years = sorted(december_data.index.year.unique())
+            for i in range(len(years) - 1):
+                prev = december_data[december_data.index.year == years[i]].iloc[0]
+                curr = december_data[december_data.index.year == years[i+1]].iloc[0]
+                row = {'Period': f'Dec {years[i]} → Dec {years[i+1]}'}
+                for p in ['Sean', 'Kim', 'Sean + Kim']:
+                    if p in prev and p in curr and prev[p] > 0:
+                        row[f'{p} $'] = curr[p] - prev[p]
+                        row[f'{p} %'] = ((curr[p] / prev[p]) - 1) * 100
+                yoy_data.append(row)
+            df_yoy = pd.DataFrame(yoy_data)
+            styled_yoy = df_yoy.style.map(color_val, subset=[c for c in df_yoy.columns if c != 'Period'])\
+                .format({c: '${:,.0f}' if '$' in c else '{:+.2f}%' for c in df_yoy.columns if c != 'Period'})
+            st.dataframe(styled_yoy, use_container_width=True)
+        else:
+            st.info("Need at least 2 years of December data")
 
     with tab2:
-        # Taylor section (full as original)
-        # ... (include your original Taylor code here)
+        st.markdown("# 💎 Taylor's Nest Egg")
+        st.caption("Building long-term wealth for Taylor's future")
+        
+        taylor_df = df[df["person"] == "Taylor"].sort_values("date")
+        
+        if not taylor_df.empty:
+            current = taylor_df["value"].iloc[-1]
+            growth = ((current / taylor_df["value"].iloc[0]) - 1) * 100
+            years = (taylor_df['date'].iloc[-1] - taylor_df['date'].iloc[0]).days / 365.25
+            cagr = ((current / taylor_df["value"].iloc[0]) ** (1/years) - 1) * 100 if years > 0 else 0
+
+            col1, col2, col3 = st.columns(3)
+            col1.metric("Current Value", f"${current:,.0f}")
+            col2.metric("Total Growth", f"{growth:+.1f}%")
+            col3.metric("CAGR", f"{cagr:.1f}%")
+
+            fig_t = go.Figure(go.Scatter(
+                x=taylor_df["date"], y=taylor_df["value"],
+                line=dict(color="#00CC96", width=3),
+                fill='tozeroy', fillcolor='rgba(0,204,150,0.1)',
+                hovertemplate="<b>Taylor</b><br>%{x|%b %Y}: $%{y:,.0f}<extra></extra>"
+            ))
+            fig_t.update_layout(title="Taylor's Portfolio Growth Over Time", height=500)
+            st.plotly_chart(fig_t, use_container_width=True)
+
+            st.markdown("---")
+            st.markdown("### 🎯 Long-Term Outlook for Taylor")
+            taylor_age = datetime.now().year - 2021
+            st.info(f"""
+            **Taylor is approximately {taylor_age} years old.** Time is her superpower.
+            
+            At {cagr:.1f}% CAGR:
+            - Age 18 (2039): ~${current * ((1 + cagr/100) ** (2039 - datetime.now().year)):,.0f}
+            - Age 30 (2051): ~${current * ((1 + cagr/100) ** (2051 - datetime.now().year)):,.0f}
+            - Age 40 (2061): ~${current * ((1 + cagr/100) ** (2061 - datetime.now().year)):,.0f}
+            
+            Let compounding work its magic. 🚀
+            """)
+
+            # Taylor MoM tables
+            taylor_pivot = taylor_df.set_index('date')['value'].resample('ME').last().to_frame()
+            taylor_mom_dollar = taylor_pivot.diff().round(0)
+            taylor_mom_pct = taylor_pivot.pct_change() * 100
+            taylor_years = sorted(taylor_pivot.index.year.unique(), reverse=True)
+            taylor_tabs = st.tabs([str(y) for y in taylor_years])
+
+            for tab, year in zip(taylor_tabs, taylor_years):
+                with tab:
+                    mask = taylor_pivot.index.year == year
+                    display = []
+                    for date in taylor_pivot[mask].index:
+                        display.append({
+                            'Date': date.strftime('%b %Y'),
+                            'Change $': taylor_mom_dollar.loc[date, 'value'],
+                            'Change %': taylor_mom_pct.loc[date, 'value']
+                        })
+                    df_disp = pd.DataFrame(display)
+                    styled = df_disp.style.map(color_val, subset=['Change $', 'Change %'])\
+                        .format({'Change $': '${:,.0f}', 'Change %': '{:+.2f}%'})
+                    st.dataframe(styled, use_container_width=True)
+        else:
+            st.info("No data for Taylor yet.")
 
     st.download_button(
         "Export All Monthly Data",
