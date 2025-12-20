@@ -75,7 +75,7 @@ Be my best-friend financial genius: warm, direct, proactive, and back everything
 
 def init_chat(api_key, history):
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel('gemini-1.5-pro', system_instruction=SYSTEM_PROMPT)
+    model = genai.GenerativeModel('gemini-1.5-flash', system_instruction=SYSTEM_PROMPT)
     formatted = [{"role": m["role"], "parts": [m["content"]]} for m in history]
     return model.start_chat(history=formatted)
 
