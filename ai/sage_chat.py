@@ -72,7 +72,7 @@ def init_chat(api_key, history):
     """Initialize Gemini 1.5 Flash chat - FIXED MODEL NAME"""
     genai.configure(api_key=api_key)
     model = genai.GenerativeModel(
-        'gemini-1.5-flash',  # FIXED: Was 'gemini-3.0-flash'
+        'gemini-2.5-flash',  # FIXED: Was 'gemini-3.0-flash'
         system_instruction=SYSTEM_PROMPT
     )
     formatted_history = [
