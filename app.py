@@ -22,6 +22,12 @@ st.set_page_config(
 
 if not DB_AVAILABLE:
     st.error(f"⚠️ Database connection failed: {DB_ERROR or 'Unknown error'}")
+    st.info("""
+    Please check your database configuration:
+    1. Verify the `postgres_url` is set in Streamlit Secrets
+    2. Ensure your database is accessible
+    3. Check that SSL is properly configured
+    """)
     st.stop()
 
 # ------------------------------------------------------------------
