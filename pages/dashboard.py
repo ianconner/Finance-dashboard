@@ -1,4 +1,4 @@
-# pages/dashboard.py - Complete final version with full charts, multi-portfolio, auto-snapshot
+# pages/dashboard.py - Final complete version
 
 import streamlit as st
 import pandas as pd
@@ -17,7 +17,7 @@ from data.parser import parse_portfolio_csv, merge_portfolios
 from data.importers import import_excel_format
 from analysis.projections import calculate_confidence_score
 
-def show_dashboard(df, df_net, df_port, port_summary):
+def show_dashboard():
     # Load historical monthly data
     df = get_monthly_updates()
     if not df.empty:
@@ -61,15 +61,14 @@ def show_dashboard(df, df_net, df_port, port_summary):
         snapshot_date = datetime.today().replace(day=1) + pd.offsets.MonthEnd(0)
         snapshot_date = snapshot_date.date()
 
-        # Overwrite any existing entry for this month
         add_monthly_update(snapshot_date, 'Sean', 'Personal', current_sean_kim)
         add_monthly_update(snapshot_date, 'Taylor', 'Personal', current_taylor)
 
-        # Reload data with new snapshot
+        # Reload with snapshot
         df = get_monthly_updates()
         df["date"] = pd.to_datetime(df["date"])
 
-    # Net worth from monthly data (now includes latest snapshot)
+    # Net worth from monthly data
     df_sean_kim = df[df["person"].isin(["Sean", "Kim"])]
     df_sean_kim_total = df_sean_kim.groupby("date")["value"].sum().reset_index().sort_values("date")
     current_sean_kim = df_sean_kim_total["value"].iloc[-1] if not df_sean_kim_total.empty else 0
@@ -114,19 +113,11 @@ def show_dashboard(df, df_net, df_port, port_summary):
             st.error(f"🚨 Adjustment needed • {years_remaining} years remaining • {confidence:.0f}% confidence")
 
         st.markdown("#### Adjust Retirement Goal")
-        new_target = st.slider(
-            "Target Amount",
-            min_value=500000,
-            max_value=5000000,
-            value=int(retirement_target),
-            step=50000,
-            format="$%d",
-            key="goal_slider"
-        )
+        new_target = st.slider("Target Amount", 500000, 5000000, int(retirement_target), step=50000, format="$%d")
         if new_target != retirement_target:
             set_retirement_goal(new_target)
             st.rerun()
-        
+
         st.markdown("---")
 
     # ------------------------------------------------------------------
@@ -158,39 +149,39 @@ def show_dashboard(df, df_net, df_port, port_summary):
         st.markdown("---")
 
     # ------------------------------------------------------------------
-    # Sidebar - Collapsible Multi-Portfolio Upload
+    # Sidebar - Clean Upload Layout
     # ------------------------------------------------------------------
     with st.sidebar:
         with st.expander("S.A.G.E. – Your Strategic Partner", expanded=True):
             st.subheader("Upload Portfolio CSVs")
-            st.caption("Latest upload becomes monthly snapshot")
+            st.caption("Latest upload becomes monthly snapshot — up to 3 accounts")
 
-            with st.expander("Account 1"):
-                port_file1 = st.file_uploader("Fidelity CSV", type="csv", key="port1", label_visibility="collapsed")
-                if port_file1:
-                    _, temp_summary = parse_portfolio_csv(port_file1)
-                    if temp_summary:
-                        csv_b64 = base64.b64encode(port_file1.getvalue()).decode()
-                        save_portfolio_csv_slot(1, csv_b64)
-                        st.success(f"Account 1: ${temp_summary['total_value']:,.0f}")
+            st.markdown("#### Account 1")
+            port_file1 = st.file_uploader("Fidelity CSV", type="csv", key="port1", label_visibility="collapsed")
+            if port_file1:
+                _, temp_summary = parse_portfolio_csv(port_file1)
+                if temp_summary:
+                    csv_b64 = base64.b64encode(port_file1.getvalue()).decode()
+                    save_portfolio_csv_slot(1, csv_b64)
+                    st.success(f"Account 1: ${temp_summary['total_value']:,.0f}")
 
-            with st.expander("Account 2 (optional)"):
-                port_file2 = st.file_uploader("Fidelity CSV", type="csv", key="port2", label_visibility="collapsed")
-                if port_file2:
-                    _, temp_summary = parse_portfolio_csv(port_file2)
-                    if temp_summary:
-                        csv_b64 = base64.b64encode(port_file2.getvalue()).decode()
-                        save_portfolio_csv_slot(2, csv_b64)
-                        st.success(f"Account 2: ${temp_summary['total_value']:,.0f}")
+            st.markdown("#### Account 2 (optional)")
+            port_file2 = st.file_uploader("Fidelity CSV", type="csv", key="port2", label_visibility="collapsed")
+            if port_file2:
+                _, temp_summary = parse_portfolio_csv(port_file2)
+                if temp_summary:
+                    csv_b64 = base64.b64encode(port_file2.getvalue()).decode()
+                    save_portfolio_csv_slot(2, csv_b64)
+                    st.success(f"Account 2: ${temp_summary['total_value']:,.0f}")
 
-            with st.expander("Account 3 (optional)"):
-                port_file3 = st.file_uploader("Fidelity CSV", type="csv", key="port3", label_visibility="collapsed")
-                if port_file3:
-                    _, temp_summary = parse_portfolio_csv(port_file3)
-                    if temp_summary:
-                        csv_b64 = base64.b64encode(port_file3.getvalue()).decode()
-                        save_portfolio_csv_slot(3, csv_b64)
-                        st.success(f"Account 3: ${temp_summary['total_value']:,.0f}")
+            st.markdown("#### Account 3 (optional)")
+            port_file3 = st.file_uploader("Fidelity CSV", type="csv", key="port3", label_visibility="collapsed")
+            if port_file3:
+                _, temp_summary = parse_portfolio_csv(port_file3)
+                if temp_summary:
+                    csv_b64 = base64.b64encode(port_file3.getvalue()).decode()
+                    save_portfolio_csv_slot(3, csv_b64)
+                    st.success(f"Account 3: ${temp_summary['total_value']:,.0f}")
 
             if portfolio_loaded:
                 st.success(f"**Snapshot saved for {snapshot_date.strftime('%B %Y')}**")
