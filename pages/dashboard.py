@@ -121,11 +121,8 @@ def show_dashboard(df, df_net, df_port, port_summary):
                     save_portfolio_csv(csv_b64)
                     st.rerun()
 
-            st.subheader("Talk to S.A.G.E.")
-            if df_port.empty:
-                st.caption("Upload portfolio CSV to enable full analysis")
-            
-           if st.button("🧠 Talk to S.A.G.E.", use_container_width=True):
+            st.caption("Always here for strategy, risks, opportunities, or just to chat.")
+            if st.button("🧠 Talk to S.A.G.E.", use_container_width=True):
                 st.session_state.page = "ai"
                 st.rerun()
 
