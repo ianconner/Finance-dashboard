@@ -79,3 +79,47 @@ def parse_portfolio_csv(file_obj):
                    'unrealized_gain', 'pct_gain', 'allocation']]
 
     return clean_df, summary
+
+# Add this function at the end of data/parser.py
+
+def merge_portfolios(portfolio_dfs):
+    """Combine multiple portfolio DataFrames into one total view"""
+    if not portfolio_dfs:
+        return pd.DataFrame(), {}
+
+    # Concatenate all
+    merged = pd.concat(portfolio_dfs, ignore_index=True)
+
+    # Group by ticker to combine same holdings across accounts
+    merged = merged.groupby('ticker', as_index=False).agg({
+        'shares': 'sum',
+        'price': 'last',  # use most recent price
+        'market_value': 'sum',
+        'cost_basis': 'sum',
+        'unrealized_gain': 'sum'
+    })
+
+    # Recalculate derived fields
+    merged['pct_gain'] = merged.apply(
+        lambda row: (row['unrealized_gain'] / row['cost_basis'] * 100) 
+        if row['cost_basis'] > 0 else 0, axis=1
+    )
+
+    total_value = merged['market_value'].sum()
+    if total_value > 0:
+        merged['allocation'] = merged['market_value'] / total_value
+    else:
+        merged['allocation'] = 0.0
+
+    # Summary
+    total_cost = merged['cost_basis'].sum()
+    summary = {
+        'total_value': total_value,
+        'total_cost': total_cost,
+        'total_gain': merged['unrealized_gain'].sum(),
+        'total_gain_pct': (merged['unrealized_gain'].sum() / total_cost * 100) if total_cost > 0 else 0,
+        'top_holding': merged.loc[merged['market_value'].idxmax(), 'ticker'] if not merged.empty else 'N/A',
+        'top_allocation': merged['allocation'].max() * 100 if not merged.empty else 0
+    }
+
+    return merged, summary
