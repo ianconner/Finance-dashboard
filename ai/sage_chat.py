@@ -3,115 +3,83 @@
 import google.generativeai as genai
 import streamlit as st
 from datetime import datetime
-import json
 
 from config.constants import SYSTEM_PROMPT
-from database.operations import save_ai_message, load_ai_history
+from database.operations import save_ai_message
 from analysis.projections import calculate_projection_cone, calculate_confidence_score
-from ai.sage_chat import init_chat, send_message
 
-# ------------------------------------------------------------------
-# Tool: Real-time news & events (web search + browse)
-# ------------------------------------------------------------------
 def get_real_time_context():
-    """Fetch current market-moving news and events"""
-    try:
-        from xai.tools import web_search, browse_page
-        
-        # Search for today's key financial news
-        results = web_search(
-            query="top financial market news today OR Fed OR inflation OR tariffs OR recession OR earnings site:reuters.com OR site:bloomberg.com OR site:cnbc.com OR site:wsj.com",
-            num_results=8
-        )
-        
-        news_summary = "Recent key events impacting markets:\n"
-        for r in results[:5]:
-            title = r.get('title', 'No title')
-            snippet = r.get('snippet', '')[:200]
-            news_summary += f"• {title}: {snippet}\n"
-        
-        return news_summary.strip()
-    
-    except Exception as e:
-        return f"(Real-time news fetch failed: {str(e)} — proceeding with stored knowledge)"
+    """Placeholder for real-time news — will be upgraded with tools later"""
+    return "(Real-time news integration coming soon — using latest knowledge for now)"
 
-# ------------------------------------------------------------------
-# Enhanced initial analysis
-# ------------------------------------------------------------------
-def generate_comprehensive_analysis(chat, df_net, df_port, port_summary, retirement_target):
+def generate_initial_analysis(chat, df_net, df_port, port_summary, retirement_target):
+    """Generate deep initial strategic analysis"""
     confidence, conf_method = calculate_confidence_score(df_net, retirement_target)
     years_left = 2042 - datetime.now().year
-    current_nw = df_net['value'].iloc[-1]
-    progress = (current_nw / retirement_target) * 100
+    current_nw = df_net['value'].iloc[-1] if not df_net.empty else 0
+    progress = (current_nw / retirement_target) * 100 if retirement_target > 0 else 0
     
     future_dates, conservative, current_pace, optimistic = calculate_projection_cone(
         df_net, retirement_target
     )
-    projected_2042 = current_pace[-1] if current_pace else current_nw
     
-    # Real-time context
+    projected_2042 = current_pace[-1] if current_pace and len(current_pace) > 0 else current_nw
+    conservative_2042 = conservative[-1] if conservative and len(conservative) > 0 else 'N/A'
+    optimistic_2042 = optimistic[-1] if optimistic and len(optimistic) > 0 else 'N/A'
+    
     real_time = get_real_time_context()
     
     prompt = f"""
 Current date: {datetime.now().strftime('%B %d, %Y')}
 
-RETIREMENT GOAL: ${retirement_target:,.0f} by 2042 ({years_left} years left)
-CURRENT NET WORTH (Sean + Kim): ${current_nw:,.0f}
-PROGRESS: {progress:.1f}%
-CONFIDENCE: {confidence:.0f}% ({conf_method})
-
-    prompt = f"""
-Current date: {datetime.now().strftime('%B %d, %Y')}
-
-RETIREMENT GOAL: ${retirement_target:,.0f} by 2042 ({years_left} years left)
+RETIREMENT GOAL: ${retirement_target:,.0f} by 2042 ({years_left:d} years left)
 CURRENT NET WORTH (Sean + Kim): ${current_nw:,.0f}
 PROGRESS: {progress:.1f}%
 CONFIDENCE: {confidence:.0f}% ({conf_method})
 
 PROJECTIONS TO 2042:
-- Conservative (7% real): ${conservative[-1]:,.0f if conservative else 'N/A'}
+- Conservative (7% real): ${conservative_2042:,.0f if isinstance(conservative_2042, (int, float)) else conservative_2042}
 - Current Pace: ${projected_2042:,.0f}
-- Optimistic (1.5x pace): ${optimistic[-1]:,.0f if optimistic else 'N/A'}
+- Optimistic (1.5x pace): ${optimistic_2042:,.0f if isinstance(optimistic_2042, (int, float)) else optimistic_2042}
 
 PORTFOLIO SNAPSHOT:
-- {len(df_port)} holdings
-- Total value: ${port_summary.get('total_value', 0):,.0f}
-- Unrealized gain: {port_summary.get('total_gain_pct', 0):+.1f}%
-- Top holding: {port_summary.get('top_holding', 'N/A')} ({port_summary.get('top_allocation', 0):.1f}%)
+- Holdings: {len(df_port)} positions
+- Total Value: ${port_summary.get('total_value', 0):,.0f}
+- Unrealized Gain: {port_summary.get('total_gain_pct', 0):+.1f}%
+- Top Holding: {port_summary.get('top_holding', 'N/A')} ({port_summary.get('top_allocation', 0):.1f}%)
 
-REAL-TIME MARKET CONTEXT:
+REAL-TIME CONTEXT:
 {real_time}
 
-Give me your full, deep analysis as my best-friend financial genius team:
-- Are we on/exceeding/behind pace?
+Give me your full, deep strategic analysis:
+- Are we on track? Ahead? Behind?
 - Biggest risks and opportunities right now?
-- Any concentration or sector imbalances?
-- Tax moves worth considering?
-- Specific rebalance or action recommendations?
-- How current news/events could affect us and what we should do?
+- Concentration or sector concerns?
+- Tax optimization ideas?
+- Specific rebalance or contribution recommendations?
+- How current events could impact us — and what we should do?
 
-Be direct, warm, proactive, and back everything with logic.
+Be my best-friend financial genius: warm, direct, proactive, and back everything with logic.
 """
 
     try:
         response = chat.send_message(prompt)
         return prompt, response.text
     except Exception as e:
-        st.error(f"Analysis generation failed: {e}")
+        st.error(f"Initial analysis failed: {e}")
         return prompt, None
 
-# ------------------------------------------------------------------
-# Main functions
-# ------------------------------------------------------------------
 def init_chat(api_key, history):
+    """Initialize Gemini chat"""
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel('gemini-1.5-pro', system_instruction=SYSTEM_PROMPT)  # upgraded to pro for depth
+    model = genai.GenerativeModel('gemini-1.5-pro', system_instruction=SYSTEM_PROMPT)
     formatted = [{"role": m["role"], "parts": [m["content"]]} for m in history]
     return model.start_chat(history=formatted)
 
 def send_message(chat, user_input):
+    """Send user message and get response"""
     try:
         response = chat.send_message(user_input)
         return response.text
     except Exception as e:
-        return f"Sorry, something went wrong: {str(e)}"
+        return f"Sorry, I hit an error: {str(e)}"
