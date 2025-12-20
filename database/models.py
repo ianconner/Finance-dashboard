@@ -30,13 +30,11 @@ class AIChat(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     role = Column(String)
     content = Column(String)
-    timestamp = Column(Date)
 
 class PortfolioCSV(Base):
     __tablename__ = "portfolio_csv"
-    id = Column(Integer, primary_key=True, autoincrement=True)
+    id = Column(Integer, primary_key=True, autoincrement=False)  # Fixed: allow manual ID setting
     csv_data = Column(String)
-    uploaded_at = Column(Date)
 
 # Create all tables if they don't exist
 Base.metadata.create_all(engine)
