@@ -1,4 +1,4 @@
-# data/parser.py - DEBUG VERSION with extensive logging
+# data/parser.py - ROBUST VERSION with better CSV handling
 
 import pandas as pd
 import streamlit as st
@@ -36,6 +36,14 @@ def parse_portfolio_csv(file_obj):
             st.error(f"Missing columns: {', '.join(missing)}")
             return pd.DataFrame(), {}
         
+        # CRITICAL: Filter out rows where Account Name is actually a symbol
+        # Real account names contain spaces or apostrophes, symbols don't
+        df = df[df['Account Name'].astype(str).str.contains(r"[\s']", regex=True, na=False)]
+        
+        if df.empty:
+            st.error("No valid account names found in CSV")
+            return pd.DataFrame(), {}
+        
         # Clean numeric columns
         df['Current Value'] = df['Current Value'].astype(str).str.replace(r'[\$,]', '', regex=True).str.strip()
         df['Current Value'] = pd.to_numeric(df['Current Value'], errors='coerce').fillna(0)
@@ -65,7 +73,7 @@ def parse_portfolio_csv(file_obj):
             df['cost_basis'] = df['market_value'] - df['Total Gain/Loss Dollar']
             df['unrealized_gain'] = df['Total Gain/Loss Dollar']
         else:
-            df['cost_basis'] = df['market_value']  # No gain/loss data
+            df['cost_basis'] = df['market_value']
             df['unrealized_gain'] = 0
         
         # Ensure cost basis is never negative
@@ -191,99 +199,42 @@ def calculate_net_worth_from_csv(csv_data_b64):
     """
     Calculate net worth from CSV data by Account Name
     Returns: (sean_kim_total, taylor_total)
-    
-    DEBUG VERSION - Shows detailed logging
     """
     import base64
     import io
     
-    st.write("🔍 **DEBUG: Starting calculate_net_worth_from_csv**")
-    
     try:
-        # Decode the base64 data
         decoded = base64.b64decode(csv_data_b64).decode('utf-8')
-        st.write(f"✅ Decoded {len(decoded)} characters")
-        
-        # Read CSV
         raw_df = pd.read_csv(io.StringIO(decoded))
-        st.write(f"✅ Read CSV with {len(raw_df)} rows")
-        
-        # Show columns
-        st.write(f"📋 Columns found: {list(raw_df.columns)}")
-        
-        # Clean column names
         raw_df.columns = raw_df.columns.str.strip()
         
-        # Check for required columns
-        if 'Account Name' not in raw_df.columns:
-            st.error("❌ 'Account Name' column not found!")
-            st.write(f"Available columns: {list(raw_df.columns)}")
-            return 0, 0
-            
-        if 'Current Value' not in raw_df.columns:
-            st.error("❌ 'Current Value' column not found!")
-            st.write(f"Available columns: {list(raw_df.columns)}")
+        if 'Account Name' not in raw_df.columns or 'Current Value' not in raw_df.columns:
             return 0, 0
         
-        st.write("✅ Required columns found")
+        # CRITICAL FIX: Filter to only rows with real account names (contain space or apostrophe)
+        raw_df = raw_df[raw_df['Account Name'].astype(str).str.contains(r"[\s']", regex=True, na=False)]
         
-        # Show first few account names
-        st.write("📝 Account Names in CSV:")
-        st.write(raw_df['Account Name'].unique())
+        if raw_df.empty:
+            return 0, 0
         
         # Clean Current Value column
-        st.write("🧹 Cleaning Current Value column...")
         raw_df['Current Value'] = raw_df['Current Value'].astype(str).str.replace(r'[\$,]', '', regex=True).str.strip()
         raw_df['Current Value'] = pd.to_numeric(raw_df['Current Value'], errors='coerce').fillna(0)
-        
-        st.write(f"✅ Total Current Value in CSV: ${raw_df['Current Value'].sum():,.2f}")
         
         sean_kim_total = 0
         taylor_total = 0
         
-        sean_rows = []
-        kim_rows = []
-        taylor_rows = []
-        
-        # Process each row
-        for idx, row in raw_df.iterrows():
+        for _, row in raw_df.iterrows():
             account_name = str(row.get('Account Name', '')).lower()
             value = row.get('Current Value', 0)
             
-            if 'sean' in account_name:
+            if 'sean' in account_name or 'kim' in account_name:
                 sean_kim_total += value
-                sean_rows.append((account_name, value))
-            elif 'kim' in account_name:
-                sean_kim_total += value
-                kim_rows.append((account_name, value))
             elif 'taylor' in account_name:
                 taylor_total += value
-                taylor_rows.append((account_name, value))
-        
-        # Show breakdown
-        st.write("\n💰 **Sean's Accounts:**")
-        for name, val in sean_rows:
-            st.write(f"  - {name}: ${val:,.2f}")
-        st.write(f"  **Sean Subtotal: ${sum(v for _, v in sean_rows):,.2f}**")
-        
-        st.write("\n💰 **Kim's Accounts:**")
-        for name, val in kim_rows:
-            st.write(f"  - {name}: ${val:,.2f}")
-        st.write(f"  **Kim Subtotal: ${sum(v for _, v in kim_rows):,.2f}**")
-        
-        st.write("\n💰 **Taylor's Accounts:**")
-        for name, val in taylor_rows:
-            st.write(f"  - {name}: ${val:,.2f}")
-        st.write(f"  **Taylor Subtotal: ${taylor_total:,.2f}**")
-        
-        st.write(f"\n✅ **FINAL TOTALS:**")
-        st.write(f"  - Sean + Kim: ${sean_kim_total:,.2f}")
-        st.write(f"  - Taylor: ${taylor_total:,.2f}")
         
         return sean_kim_total, taylor_total
         
     except Exception as e:
-        st.error(f"❌ Error in calculate_net_worth_from_csv: {e}")
-        import traceback
-        st.code(traceback.format_exc())
+        print(f"Error calculating net worth from CSV: {e}")
         return 0, 0
