@@ -17,7 +17,7 @@ from data.parser import parse_portfolio_csv, merge_portfolios
 from data.importers import import_excel_format
 from analysis.projections import calculate_confidence_score
 
-def show_dashboard():
+def show_dashboard(df, df_net, df_port, port_summary):
     # Load historical monthly data
     df = get_monthly_updates()
     if not df.empty:
