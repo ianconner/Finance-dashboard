@@ -59,10 +59,18 @@ CURRENT NET WORTH (Sean + Kim): ${current_nw:,.0f}
 PROGRESS: {progress:.1f}%
 CONFIDENCE: {confidence:.0f}% ({conf_method})
 
+    prompt = f"""
+Current date: {datetime.now().strftime('%B %d, %Y')}
+
+RETIREMENT GOAL: ${retirement_target:,.0f} by 2042 ({years_left} years left)
+CURRENT NET WORTH (Sean + Kim): ${current_nw:,.0f}
+PROGRESS: {progress:.1f}%
+CONFIDENCE: {confidence:.0f}% ({conf_method})
+
 PROJECTIONS TO 2042:
-- Conservative (7% real): ${conservative[-1]:,.0f if conservative else 0:,.0f}
+- Conservative (7% real): ${conservative[-1]:,.0f if conservative else 'N/A'}
 - Current Pace: ${projected_2042:,.0f}
-- Optimistic (1.5x pace): ${optimistic[-1]:,.0f if optimistic else 0:,.0f}
+- Optimistic (1.5x pace): ${optimistic[-1]:,.0f if optimistic else 'N/A'}
 
 PORTFOLIO SNAPSHOT:
 - {len(df_port)} holdings
