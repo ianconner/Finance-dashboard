@@ -1,18 +1,31 @@
-# data/parser.py - FIX for misaligned columns
+# data/parser.py - FINAL VERSION with trailing comma handling
 
 import pandas as pd
 import streamlit as st
+import io
 
 def parse_portfolio_csv(file_obj):
     """
-    Parse portfolio CSV with proper column detection
+    Parse portfolio CSV - handles trailing commas and malformed CSVs
     """
     try:
+        # Read the raw content first
         if isinstance(file_obj, str):
-            from io import StringIO
-            df = pd.read_csv(StringIO(file_obj))
+            content = file_obj
         else:
-            df = pd.read_csv(file_obj)
+            file_obj.seek(0)
+            content = file_obj.read()
+            if isinstance(content, bytes):
+                content = content.decode('utf-8')
+        
+        # Clean up trailing commas on each line
+        lines = content.split('\n')
+        cleaned_lines = [line.rstrip(',') for line in lines]
+        cleaned_content = '\n'.join(cleaned_lines)
+        
+        # Now parse the cleaned CSV
+        df = pd.read_csv(io.StringIO(cleaned_content))
+        
     except Exception as e:
         st.error(f"Failed to read CSV: {e}")
         return pd.DataFrame(), {}
@@ -24,39 +37,18 @@ def parse_portfolio_csv(file_obj):
     # Clean column names
     df.columns = df.columns.str.strip()
     
-    st.write("### 🔍 Column Detection")
-    st.write(f"Columns found: {list(df.columns)}")
+    # Debug: show what we got
+    st.write("### 🔍 CSV Parsed Successfully")
+    st.write(f"Rows: {len(df)} | Columns: {len(df.columns)}")
     
-    # Find the actual Account Name column by checking content
-    account_name_col = None
-    
-    # Check if we have the expected column name
-    if 'Account Name' in df.columns:
-        # Verify it has actual account names (contains spaces or apostrophes)
-        sample_values = df['Account Name'].dropna().head(10).astype(str)
-        has_real_names = any("'" in str(val) or " " in str(val) for val in sample_values)
-        
-        if has_real_names:
-            account_name_col = 'Account Name'
-            st.write(f"✅ Found Account Name column: '{account_name_col}'")
-        else:
-            st.write(f"⚠️ 'Account Name' column exists but contains symbols, not names")
-            st.write(f"Sample values: {list(sample_values)}")
-            
-            # Try to find the right column by looking at second column (usually account name in Fidelity CSVs)
-            if len(df.columns) > 1:
-                second_col = df.columns[1]
-                sample_values_2 = df[second_col].dropna().head(10).astype(str)
-                st.write(f"Checking second column '{second_col}': {list(sample_values_2)}")
-                
-                has_real_names_2 = any("'" in str(val) or " " in str(val) for val in sample_values_2)
-                if has_real_names_2:
-                    account_name_col = second_col
-                    st.write(f"✅ Using column '{second_col}' as Account Name")
-    
-    if not account_name_col:
-        st.error("❌ Could not find Account Name column")
+    # Check for Account Name column
+    if 'Account Name' not in df.columns:
+        st.error(f"❌ 'Account Name' not in columns: {list(df.columns)}")
         return pd.DataFrame(), {}
+    
+    # Show sample account names
+    unique_accounts = df['Account Name'].unique()
+    st.write(f"**Account Names found:** {list(unique_accounts)}")
     
     # Check for required columns
     required = ['Symbol', 'Current Value']
@@ -64,25 +56,18 @@ def parse_portfolio_csv(file_obj):
     
     if missing:
         st.error(f"Missing columns: {', '.join(missing)}")
-        st.write(f"Available: {list(df.columns)}")
         return pd.DataFrame(), {}
-    
-    # Show sample of what we're using
-    st.write(f"\n**Using Account Name from:** '{account_name_col}'")
-    st.write("Sample account names:")
-    st.write(df[account_name_col].unique()[:10])
     
     # Clean numeric columns
     df['Current Value'] = df['Current Value'].astype(str).str.replace(r'[\$,]', '', regex=True).str.strip()
     df['Current Value'] = pd.to_numeric(df['Current Value'], errors='coerce').fillna(0)
     
-    # Optional columns
     for col in ['Quantity', 'Last Price', 'Cost Basis Total']:
         if col in df.columns:
             df[col] = df[col].astype(str).str.replace(r'[\$,]', '', regex=True).str.strip()
             df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
     
-    # Set up output columns
+    # Parse data
     df['ticker'] = df['Symbol'].astype(str).str.upper().str.strip()
     df['market_value'] = df['Current Value']
     df['shares'] = df.get('Quantity', 0)
@@ -93,9 +78,7 @@ def parse_portfolio_csv(file_obj):
         lambda row: (row['unrealized_gain'] / row['cost_basis'] * 100) if row['cost_basis'] > 0 else 0,
         axis=1
     )
-    
-    # Use the correct account name column
-    df['account_name'] = df[account_name_col]
+    df['account_name'] = df['Account Name']
     
     total_value = df['market_value'].sum()
     if total_value > 0:
@@ -112,6 +95,8 @@ def parse_portfolio_csv(file_obj):
         'top_allocation': df['allocation'].max() * 100 if not df.empty else 0
     }
     
+    st.write(f"✅ **Total Value:** ${total_value:,.2f}")
+    
     clean_df = df[['ticker', 'shares', 'price', 'market_value', 'cost_basis',
                    'unrealized_gain', 'pct_gain', 'allocation', 'account_name']].copy()
     
@@ -124,7 +109,6 @@ def merge_portfolios(portfolio_dfs):
 
     merged = pd.concat(portfolio_dfs, ignore_index=True)
 
-    # Group by ticker
     merged = merged.groupby('ticker', as_index=False).agg({
         'shares': 'sum',
         'price': 'last',
@@ -163,65 +147,50 @@ def calculate_net_worth_from_csv(csv_data_b64):
     Returns: (sean_kim_total, taylor_total)
     """
     import base64
-    import io
     
     try:
+        # Decode and clean
         decoded = base64.b64decode(csv_data_b64).decode('utf-8')
-        raw_df = pd.read_csv(io.StringIO(decoded))
+        
+        # Remove trailing commas
+        lines = decoded.split('\n')
+        cleaned_lines = [line.rstrip(',') for line in lines]
+        cleaned_content = '\n'.join(cleaned_lines)
+        
+        # Parse
+        raw_df = pd.read_csv(io.StringIO(cleaned_content))
         raw_df.columns = raw_df.columns.str.strip()
         
         st.write("### 💰 Net Worth Calculation")
+        st.write(f"Accounts found: {list(raw_df['Account Name'].unique())}")
         
-        # Find the actual Account Name column
-        account_name_col = None
-        
-        if 'Account Name' in raw_df.columns:
-            sample_values = raw_df['Account Name'].dropna().head(10).astype(str)
-            has_real_names = any("'" in str(val) or " " in str(val) for val in sample_values)
-            
-            if has_real_names:
-                account_name_col = 'Account Name'
-            elif len(raw_df.columns) > 1:
-                # Try second column
-                second_col = raw_df.columns[1]
-                sample_values_2 = raw_df[second_col].dropna().head(10).astype(str)
-                has_real_names_2 = any("'" in str(val) or " " in str(val) for val in sample_values_2)
-                if has_real_names_2:
-                    account_name_col = second_col
-        
-        if not account_name_col:
-            st.error("❌ Could not find Account Name column")
+        if 'Account Name' not in raw_df.columns or 'Current Value' not in raw_df.columns:
+            st.error("Missing required columns")
             return 0, 0
-        
-        if 'Current Value' not in raw_df.columns:
-            st.error("❌ 'Current Value' column not found")
-            return 0, 0
-        
-        st.write(f"Using account names from column: '{account_name_col}'")
         
         # Clean Current Value
         raw_df['Current Value'] = raw_df['Current Value'].astype(str).str.replace(r'[\$,]', '', regex=True).str.strip()
         raw_df['Current Value'] = pd.to_numeric(raw_df['Current Value'], errors='coerce').fillna(0)
         
+        # Group by account name
+        account_summary = raw_df.groupby('Account Name')['Current Value'].sum()
+        
         sean_kim_total = 0
         taylor_total = 0
         
-        # Group by account name
-        account_summary = raw_df.groupby(account_name_col)['Current Value'].sum()
-        
-        st.write("\n**Breakdown by Account:**")
+        st.write("\n**Breakdown:**")
         for account_name, total in account_summary.items():
             name_lower = str(account_name).lower()
             st.write(f"  - {account_name}: ${total:,.2f}")
             
             if 'sean' in name_lower or 'kim' in name_lower:
                 sean_kim_total += total
-                st.write(f"    ✅ Sean/Kim")
+                st.write(f"    → Sean/Kim")
             elif 'taylor' in name_lower:
                 taylor_total += total
-                st.write(f"    ✅ Taylor")
+                st.write(f"    → Taylor")
         
-        st.write(f"\n**TOTALS:** Sean+Kim=${sean_kim_total:,.2f} | Taylor=${taylor_total:,.2f}")
+        st.write(f"\n✅ **Sean+Kim: ${sean_kim_total:,.2f} | Taylor: ${taylor_total:,.2f}**")
         
         return sean_kim_total, taylor_total
         
