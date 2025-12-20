@@ -107,3 +107,41 @@ def load_portfolio_csv():
     result = sess.query(PortfolioCSV).order_by(PortfolioCSV.id.desc()).first()
     sess.close()
     return result.csv_data if result else None
+
+# Add these functions at the end of database/operations.py
+
+def save_portfolio_csv_slot(slot: int, csv_b64: str):
+    """Save portfolio CSV to specific slot (1, 2, or 3)"""
+    if slot not in [1, 2, 3]:
+        raise ValueError("Slot must be 1, 2, or 3")
+    sess = get_session()
+    # Delete existing in this slot
+    sess.query(PortfolioCSV).filter(PortfolioCSV.id == slot).delete()
+    sess.add(PortfolioCSV(id=slot, csv_data=csv_b64))
+    sess.commit()
+    sess.close()
+
+def load_portfolio_csv_slot(slot: int):
+    """Load portfolio CSV from specific slot"""
+    if slot not in [1, 2, 3]:
+        return None
+    sess = get_session()
+    result = sess.query(PortfolioCSV).filter(PortfolioCSV.id == slot).first()
+    sess.close()
+    return result.csv_data if result else None
+
+def load_all_portfolios():
+    """Return dict of all saved portfolios {slot: b64_data}"""
+    portfolios = {}
+    for slot in [1, 2, 3]:
+        data = load_portfolio_csv_slot(slot)
+        if data:
+            portfolios[slot] = data
+    return portfolios
+
+def clear_all_portfolios():
+    """Optional: clear all portfolio slots"""
+    sess = get_session()
+    sess.query(PortfolioCSV).delete()
+    sess.commit()
+    sess.close()
