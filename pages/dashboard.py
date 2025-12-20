@@ -1,4 +1,4 @@
-# pages/dashboard.py - FINAL COMPLETE VERSION WITH ALL FEATURES
+# pages/dashboard.py - COMPLETE FIXED VERSION
 
 import streamlit as st
 import pandas as pd
@@ -13,7 +13,7 @@ from database.operations import (
     get_retirement_goal, set_retirement_goal,
     save_portfolio_csv_slot, load_all_portfolios, get_monthly_updates
 )
-from data.parser import parse_portfolio_csv, merge_portfolios
+from data.parser import parse_portfolio_csv, merge_portfolios, calculate_net_worth_from_csv
 from data.importers import import_excel_format
 from analysis.projections import calculate_confidence_score
 
@@ -35,34 +35,36 @@ def show_dashboard(df, df_net, df_port, port_summary):
 
     for slot, b64_data in all_b64.items():
         try:
+            # Use the new function to calculate net worth from CSV
+            sean_kim_val, taylor_val = calculate_net_worth_from_csv(b64_data)
+            current_sean_kim += sean_kim_val
+            current_taylor += taylor_val
+            
+            # Also parse for portfolio details
             decoded = base64.b64decode(b64_data).decode('utf-8')
-            raw_df = pd.read_csv(io.StringIO(decoded))
-            raw_df.columns = raw_df.columns.str.strip()
-            raw_portfolio_data.append(raw_df)
+            parsed_df, _ = parse_portfolio_csv(decoded)
+            if not parsed_df.empty:
+                raw_portfolio_data.append(parsed_df)
+                portfolio_loaded = True
+                
         except Exception as e:
             st.error(f"Error reading saved portfolio {slot}: {e}")
 
+    # Merge all portfolio data for display
     if raw_portfolio_data:
-        portfolio_loaded = True
+        df_port, port_summary = merge_portfolios(raw_portfolio_data)
 
-        for raw_df in raw_portfolio_data:
-            for _, row in raw_df.iterrows():
-                account_name = str(row.get('Account Name', ''))
-                value_str = str(row.get('Current Value', '0')).replace('$', '').replace(',', '')
-                value = pd.to_numeric(value_str, errors='coerce') or 0
-                if 'Sean' in account_name or 'sean' in account_name:
-                    current_sean_kim += value
-                elif 'Kim' in account_name or 'kim' in account_name:
-                    current_sean_kim += value
-                elif 'Taylor' in account_name or 'taylor' in account_name:
-                    current_taylor += value
+    # Auto-save snapshot if portfolios loaded
+    if portfolio_loaded and current_sean_kim > 0:
+        today = pd.Timestamp.today()
+        snapshot_date = (today + pd.offsets.MonthEnd(0)).date()
 
-        # Auto-save snapshot (month-end date)
-        snapshot_date = datetime.today().replace(day=1) + pd.offsets.MonthEnd(0)
-        snapshot_date = snapshot_date.date()
-
-        add_monthly_update(snapshot_date, 'Sean', 'Personal', current_sean_kim)
-        add_monthly_update(snapshot_date, 'Taylor', 'Personal', current_taylor)
+        try:
+            add_monthly_update(snapshot_date, 'Sean', 'Personal', current_sean_kim)
+            if current_taylor > 0:
+                add_monthly_update(snapshot_date, 'Taylor', 'Personal', current_taylor)
+        except Exception as e:
+            st.warning(f"Could not save snapshot: {e}")
 
         # Reload with snapshot
         df = get_monthly_updates()
@@ -71,17 +73,22 @@ def show_dashboard(df, df_net, df_port, port_summary):
     # Net worth from monthly data (includes latest snapshot)
     df_sean_kim = df[df["person"].isin(["Sean", "Kim"])]
     df_sean_kim_total = df_sean_kim.groupby("date")["value"].sum().reset_index().sort_values("date")
-    current_sean_kim = df_sean_kim_total["value"].iloc[-1] if not df_sean_kim_total.empty else 0
+    
+    if not df_sean_kim_total.empty:
+        current_sean_kim = df_sean_kim_total["value"].iloc[-1]
 
     df_taylor = df[df["person"] == "Taylor"]
     df_taylor_total = df_taylor.groupby("date")["value"].sum().reset_index().sort_values("date")
-    current_taylor = df_taylor_total["value"].iloc[-1] if not df_taylor_total.empty else 0
+    
+    if not df_taylor_total.empty:
+        current_taylor = df_taylor_total["value"].iloc[-1]
 
     # ------------------------------------------------------------------
-    # FULL RETIREMENT GOAL SECTION
+    # RETIREMENT GOAL SECTION (RESTORED)
     # ------------------------------------------------------------------
+    retirement_target = get_retirement_goal()
+    
     if current_sean_kim > 0:
-        retirement_target = get_retirement_goal()
         progress_pct = (current_sean_kim / retirement_target) * 100
         years_remaining = 2042 - datetime.now().year
         
@@ -119,8 +126,11 @@ def show_dashboard(df, df_net, df_port, port_summary):
             key="goal_slider"
         )
         if new_target != retirement_target:
-            set_retirement_goal(new_target)
-            st.rerun()
+            try:
+                set_retirement_goal(new_target)
+                st.rerun()
+            except Exception as e:
+                st.error(f"Could not update goal: {e}")
         
         st.markdown("---")
 
@@ -138,9 +148,18 @@ def show_dashboard(df, df_net, df_port, port_summary):
         if len(ytd_df["date"].unique()) > 1:
             start_vals = ytd_df[ytd_df["date"] == ytd_df["date"].min()].groupby("person")["value"].sum()
             latest_vals = ytd_df[ytd_df["date"] == ytd_df["date"].max()].groupby("person")["value"].sum()
-            ytd_pct = ((latest_vals / start_vals) - 1) * 100
-            combined_ytd = ((latest_vals.get('Sean',0) + latest_vals.get('Kim',0)) / 
-                            (start_vals.get('Sean',1) + start_vals.get('Kim',1)) - 1) * 100 if (start_vals.get('Sean',1) + start_vals.get('Kim',1)) > 0 else 0
+            
+            combined_start = start_vals.get('Sean', 0) + start_vals.get('Kim', 0)
+            combined_latest = latest_vals.get('Sean', 0) + latest_vals.get('Kim', 0)
+            
+            ytd_pct = {}
+            for person in ['Sean', 'Kim', 'Taylor']:
+                if person in start_vals and start_vals[person] > 0:
+                    ytd_pct[person] = ((latest_vals.get(person, 0) / start_vals[person]) - 1) * 100
+                else:
+                    ytd_pct[person] = 0
+            
+            combined_ytd = ((combined_latest / combined_start) - 1) * 100 if combined_start > 0 else 0
 
             col1, col2, col3, col4 = st.columns(4)
             col1.metric("**Sean YTD**", f"{ytd_pct.get('Sean', 0):+.1f}%")
@@ -158,36 +177,50 @@ def show_dashboard(df, df_net, df_port, port_summary):
     with st.sidebar:
         with st.expander("S.A.G.E. – Your Strategic Partner", expanded=True):
             st.subheader("Upload Portfolio CSVs")
-            st.caption("Latest upload becomes monthly snapshot — up to 3 accounts")
+            st.caption("Latest upload becomes monthly snapshot – up to 3 accounts")
 
             st.markdown("#### Account 1")
-            port_file1 = st.file_uploader("Fidelity CSV", type="csv", key="port1", label_visibility="collapsed")
+            port_file1 = st.file_uploader("Portfolio CSV", type="csv", key="port1", label_visibility="collapsed")
             if port_file1:
-                _, temp_summary = parse_portfolio_csv(port_file1)
-                if temp_summary:
-                    csv_b64 = base64.b64encode(port_file1.getvalue()).decode()
-                    save_portfolio_csv_slot(1, csv_b64)
-                    st.success(f"Account 1: ${temp_summary['total_value']:,.0f}")
+                try:
+                    _, temp_summary = parse_portfolio_csv(port_file1)
+                    if temp_summary:
+                        csv_b64 = base64.b64encode(port_file1.getvalue()).decode()
+                        save_portfolio_csv_slot(1, csv_b64)
+                        st.success(f"Account 1: ${temp_summary['total_value']:,.0f}")
+                        st.rerun()
+                except Exception as e:
+                    st.error(f"Error: {e}")
 
             st.markdown("#### Account 2 (optional)")
-            port_file2 = st.file_uploader("Fidelity CSV", type="csv", key="port2", label_visibility="collapsed")
+            port_file2 = st.file_uploader("Portfolio CSV", type="csv", key="port2", label_visibility="collapsed")
             if port_file2:
-                _, temp_summary = parse_portfolio_csv(port_file2)
-                if temp_summary:
-                    csv_b64 = base64.b64encode(port_file2.getvalue()).decode()
-                    save_portfolio_csv_slot(2, csv_b64)
-                    st.success(f"Account 2: ${temp_summary['total_value']:,.0f}")
+                try:
+                    _, temp_summary = parse_portfolio_csv(port_file2)
+                    if temp_summary:
+                        csv_b64 = base64.b64encode(port_file2.getvalue()).decode()
+                        save_portfolio_csv_slot(2, csv_b64)
+                        st.success(f"Account 2: ${temp_summary['total_value']:,.0f}")
+                        st.rerun()
+                except Exception as e:
+                    st.error(f"Error: {e}")
 
             st.markdown("#### Account 3 (optional)")
-            port_file3 = st.file_uploader("Fidelity CSV", type="csv", key="port3", label_visibility="collapsed")
+            port_file3 = st.file_uploader("Portfolio CSV", type="csv", key="port3", label_visibility="collapsed")
             if port_file3:
-                _, temp_summary = parse_portfolio_csv(port_file3)
-                if temp_summary:
-                    csv_b64 = base64.b64encode(port_file3.getvalue()).decode()
-                    save_portfolio_csv_slot(3, csv_b64)
-                    st.success(f"Account 3: ${temp_summary['total_value']:,.0f}")
+                try:
+                    _, temp_summary = parse_portfolio_csv(port_file3)
+                    if temp_summary:
+                        csv_b64 = base64.b64encode(port_file3.getvalue()).decode()
+                        save_portfolio_csv_slot(3, csv_b64)
+                        st.success(f"Account 3: ${temp_summary['total_value']:,.0f}")
+                        st.rerun()
+                except Exception as e:
+                    st.error(f"Error: {e}")
 
             if portfolio_loaded:
+                today = pd.Timestamp.today()
+                snapshot_date = (today + pd.offsets.MonthEnd(0)).date()
                 st.success(f"**Snapshot saved for {snapshot_date.strftime('%B %Y')}**")
 
             st.caption("Always ready when you are.")
@@ -208,7 +241,9 @@ def show_dashboard(df, df_net, df_port, port_summary):
                     st.success(f"Imported {imported} records!")
                     st.rerun()
                 if errors:
-                    st.warning(f"{len(errors)} errors")
+                    with st.expander("View Errors"):
+                        for err in errors:
+                            st.text(err)
             except Exception as e:
                 st.error(f"Import failed: {e}")
 
@@ -220,18 +255,28 @@ def show_dashboard(df, df_net, df_port, port_summary):
                 req = ['date', 'person', 'account_type', 'value']
                 if all(c in df_std.columns for c in req):
                     df_std['date'] = pd.to_datetime(df_std['date']).dt.date
+                    count = 0
                     for _, r in df_std.iterrows():
-                        add_monthly_update(r['date'], r['person'], r['account_type'], float(r['value']))
-                    st.success(f"Imported {len(df_std)} rows!")
+                        try:
+                            add_monthly_update(r['date'], r['person'], r['account_type'], float(r['value']))
+                            count += 1
+                        except Exception as e:
+                            st.warning(f"Skipped row: {e}")
+                    st.success(f"Imported {count} rows!")
                     st.rerun()
+                else:
+                    st.error(f"Missing columns. Need: {', '.join(req)}")
             except Exception as e:
                 st.error(f"Error: {e}")
 
         if st.button("Reset Database"):
             if st.checkbox("I understand this deletes all data", key="confirm_reset"):
-                reset_database()
-                st.success("Database reset!")
-                st.rerun()
+                try:
+                    reset_database()
+                    st.success("Database reset!")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Reset failed: {e}")
 
         st.markdown("---")
         st.subheader("Add Update")
@@ -244,9 +289,12 @@ def show_dashboard(df, df_net, df_port, port_summary):
         with col2:
             val = st.number_input("Value ($)", min_value=0.0)
         if st.button("Save"):
-            add_monthly_update(date_in, person, acct, float(val))
-            st.success("Saved!")
-            st.rerun()
+            try:
+                add_monthly_update(date_in, person, acct, float(val))
+                st.success("Saved!")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Error: {e}")
 
     # ------------------------------------------------------------------
     # Main Tabs - Full Charts & Tables
@@ -290,6 +338,11 @@ def show_dashboard(df, df_net, df_port, port_summary):
         st.markdown("---")
         st.markdown("## 📈 Month-over-Month Analysis")
 
+        def color_val(val):
+            if isinstance(val, (int, float)):
+                return 'background-color: #90EE90; color: black' if val > 0 else ('background-color: #FF6B6B; color: black' if val < 0 else '')
+            return ''
+
         mom_dollar = df_sean_kim_plot.diff().round(0)
         mom_pct = df_sean_kim_plot.pct_change() * 100
         years = sorted(df_sean_kim_plot.index.year.unique(), reverse=True)
@@ -307,11 +360,6 @@ def show_dashboard(df, df_net, df_port, port_summary):
                             row[f'{p} %'] = mom_pct.loc[date, p] if date in mom_pct.index else 0
                     display_data.append(row)
                 df_display = pd.DataFrame(display_data)
-
-                def color_val(val):
-                    if isinstance(val, (int, float)):
-                        return 'background-color: #90EE90; color: black' if val > 0 else ('background-color: #FF6B6B; color: black' if val < 0 else '')
-                    return ''
 
                 styled = df_display.style.map(color_val, subset=[c for c in df_display.columns if c != 'Date'])\
                     .format({c: '${:,.0f}' if '$' in c else '{:+.2f}%' for c in df_display.columns if c != 'Date'})
@@ -347,9 +395,19 @@ def show_dashboard(df, df_net, df_port, port_summary):
         
         if not taylor_df.empty:
             current = taylor_df["value"].iloc[-1]
-            growth = ((current / taylor_df["value"].iloc[0]) - 1) * 100
+            start = taylor_df["value"].iloc[0]
+            
+            if start > 0:
+                growth = ((current / start) - 1) * 100
+            else:
+                growth = 0
+            
             years = (taylor_df['date'].iloc[-1] - taylor_df['date'].iloc[0]).days / 365.25
-            cagr = ((current / taylor_df["value"].iloc[0]) ** (1/years) - 1) * 100 if years > 0 else 0
+            
+            if years > 0 and start > 0:
+                cagr = ((current / start) ** (1/years) - 1) * 100
+            else:
+                cagr = 0
 
             col1, col2, col3 = st.columns(3)
             col1.metric("Current Value", f"${current:,.0f}")
@@ -360,7 +418,7 @@ def show_dashboard(df, df_net, df_port, port_summary):
                 x=taylor_df["date"], y=taylor_df["value"],
                 line=dict(color="#00CC96", width=3),
                 fill='tozeroy', fillcolor='rgba(0,204,150,0.1)',
-                hovertemplate="<b>Taylor</b><br>%{{x|%b %Y}}: $%{{y:,.0f}}<extra></extra>"
+                hovertemplate="<b>Taylor</b><br>%{x|%b %Y}: $%{y:,.0f}<extra></extra>"
             ))
             fig_t.update_layout(title="Taylor's Portfolio Growth Over Time", height=500)
             st.plotly_chart(fig_t, use_container_width=True)
@@ -368,16 +426,24 @@ def show_dashboard(df, df_net, df_port, port_summary):
             st.markdown("---")
             st.markdown("### 🎯 Long-Term Outlook for Taylor")
             taylor_age = datetime.now().year - 2021
-            st.info(f"""
-            **Taylor is approximately {taylor_age} years old.** Time is her superpower.
             
-            At {cagr:.1f}% CAGR:
-            - Age 18 (2039): ~${current * ((1 + cagr/100) ** (2039 - datetime.now().year)):,.0f}
-            - Age 30 (2051): ~${current * ((1 + cagr/100) ** (2051 - datetime.now().year)):,.0f}
-            - Age 40 (2061): ~${current * ((1 + cagr/100) ** (2061 - datetime.now().year)):,.0f}
-            
-            Let compounding work its magic. 🚀
-            """)
+            if cagr > 0:
+                proj_18 = current * ((1 + cagr/100) ** (2039 - datetime.now().year))
+                proj_30 = current * ((1 + cagr/100) ** (2051 - datetime.now().year))
+                proj_40 = current * ((1 + cagr/100) ** (2061 - datetime.now().year))
+                
+                st.info(f"""
+                **Taylor is approximately {taylor_age} years old.** Time is her superpower.
+                
+                At {cagr:.1f}% CAGR:
+                - Age 18 (2039): ~${proj_18:,.0f}
+                - Age 30 (2051): ~${proj_30:,.0f}
+                - Age 40 (2061): ~${proj_40:,.0f}
+                
+                Let compounding work its magic. 🚀
+                """)
+            else:
+                st.info("Add more historical data to see projections")
 
             # Taylor MoM tables
             taylor_pivot = taylor_df.set_index('date')['value'].resample('ME').last().to_frame()
