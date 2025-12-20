@@ -1,6 +1,6 @@
-# ai/sage_chat.py
+# ai/sage_chat.py - Upgraded to Claude 3.5 Sonnet
 
-import google.generativeai as genai
+import anthropic
 import streamlit as st
 from datetime import datetime
 
@@ -9,11 +9,10 @@ from database.operations import save_ai_message
 from analysis.projections import calculate_projection_cone, calculate_confidence_score
 
 def get_real_time_context():
-    """Placeholder for real-time news — will be upgraded with tools later"""
-    return "(Real-time news integration coming soon — using latest knowledge for now)"
+    """Placeholder — we'll add real news later with tools"""
+    return "(Using latest knowledge of markets and economy for analysis)"
 
-def generate_initial_analysis(chat, df_net, df_port, port_summary, retirement_target):
-    """Generate deep initial strategic analysis"""
+def generate_initial_analysis(client, df_net, df_port, port_summary, retirement_target):
     confidence, conf_method = calculate_confidence_score(df_net, retirement_target)
     years_left = 2042 - datetime.now().year
     current_nw = df_net['value'].iloc[-1] if not df_net.empty else 0
@@ -29,14 +28,13 @@ def generate_initial_analysis(chat, df_net, df_port, port_summary, retirement_ta
     
     real_time = get_real_time_context()
     
-    # Safe string formatting
     conservative_str = f"${conservative_2042:,.0f}" if isinstance(conservative_2042, (int, float)) else str(conservative_2042)
     optimistic_str = f"${optimistic_2042:,.0f}" if isinstance(optimistic_2042, (int, float)) else str(optimistic_2042)
 
     prompt = f"""
 Current date: {datetime.now().strftime('%B %d, %Y')}
 
-RETIREMENT GOAL: ${retirement_target:,.0f} by 2042 ({years_left:d} years left)
+RETIREMENT GOAL: ${retirement_target:,.0f} by 2042 ({years_left} years left)
 CURRENT NET WORTH (Sean + Kim): ${current_nw:,.0f}
 PROGRESS: {progress:.1f}%
 CONFIDENCE: {confidence:.0f}% ({conf_method})
@@ -55,33 +53,41 @@ PORTFOLIO SNAPSHOT:
 REAL-TIME CONTEXT:
 {real_time}
 
-Give me your full, deep strategic analysis:
-- Are we on track? Ahead? Behind?
-- Biggest risks and opportunities right now?
-- Concentration or sector concerns?
-- Tax optimization ideas?
-- Specific rebalance or contribution recommendations?
-- How current events could impact us — and what we should do?
+{SYSTEM_PROMPT}
 
-Be my best-friend financial genius: warm, direct, proactive, and back everything with logic.
+Give me your full, deep strategic analysis as my best-friend financial genius team.
+Be warm, direct, proactive, and back everything with logic.
 """
 
     try:
-        response = chat.send_message(prompt)
-        return prompt, response.text
+        response = client.messages.create(
+            model="claude-3-5-sonnet-20241022",
+            max_tokens=4096,
+            temperature=0.7,
+            system=SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        return prompt, response.content[0].text
     except Exception as e:
         st.error(f"Initial analysis failed: {e}")
         return prompt, None
 
 def init_chat(api_key, history):
-    genai.configure(api_key=api_key)
-    model = genai.GenerativeModel('gemini-1.5-flash-latest', system_instruction=SYSTEM_PROMPT)
-    formatted = [{"role": m["role"], "parts": [m["content"]]} for m in history]
-    return model.start_chat(history=formatted)
+    client = anthropic.Anthropic(api_key=api_key)
+    return client
 
-def send_message(chat, user_input):
+def send_message(client, user_input, history):
+    messages = [{"role": m["role"] if m["role"] == "assistant" else "user", "content": m["content"]} for m in history]
+    messages.append({"role": "user", "content": user_input})
+    
     try:
-        response = chat.send_message(user_input)
-        return response.text
+        response = client.messages.create(
+            model="claude-3-5-sonnet-20241022",
+            max_tokens=4096,
+            temperature=0.7,
+            system=SYSTEM_PROMPT,
+            messages=messages
+        )
+        return response.content[0].text
     except Exception as e:
         return f"Sorry, I hit an error: {str(e)}"
