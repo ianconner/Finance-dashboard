@@ -54,34 +54,37 @@ def show_dashboard(df, df_net, df_port, port_summary):
     if raw_portfolio_data:
         df_port, port_summary = merge_portfolios(raw_portfolio_data)
 
-    # Auto-save snapshot if portfolios loaded
-    if portfolio_loaded and current_sean_kim > 0:
-        today = pd.Timestamp.today()
-        snapshot_date = (today + pd.offsets.MonthEnd(0)).date()
-
-        try:
-            add_monthly_update(snapshot_date, 'Sean', 'Personal', current_sean_kim)
-            if current_taylor > 0:
-                add_monthly_update(snapshot_date, 'Taylor', 'Personal', current_taylor)
-        except Exception as e:
-            st.warning(f"Could not save snapshot: {e}")
-
-        # Reload with snapshot
-        df = get_monthly_updates()
-        df["date"] = pd.to_datetime(df["date"])
+    # TEMPORARILY DISABLED - Only save snapshot manually to prevent auto-save issues
+    # if portfolio_loaded and current_sean_kim > 0:
+    #     today = pd.Timestamp.today()
+    #     snapshot_date = (today + pd.offsets.MonthEnd(0)).date()
+    #     try:
+    #         add_monthly_update(snapshot_date, 'Sean', 'Personal', current_sean_kim)
+    #         if current_taylor > 0:
+    #             add_monthly_update(snapshot_date, 'Taylor', 'Personal', current_taylor)
+    #     except Exception as e:
+    #         st.warning(f"Could not save snapshot: {e}")
+    #     # Reload with snapshot
+    #     df = get_monthly_updates()
+    #     df["date"] = pd.to_datetime(df["date"])
 
     # Net worth from monthly data (includes latest snapshot)
     df_sean_kim = df[df["person"].isin(["Sean", "Kim"])]
     df_sean_kim_total = df_sean_kim.groupby("date")["value"].sum().reset_index().sort_values("date")
     
     if not df_sean_kim_total.empty:
-        current_sean_kim = df_sean_kim_total["value"].iloc[-1]
+        current_sean_kim_from_db = df_sean_kim_total["value"].iloc[-1]
+        # Use portfolio value if available, otherwise use DB value
+        if current_sean_kim == 0:
+            current_sean_kim = current_sean_kim_from_db
 
     df_taylor = df[df["person"] == "Taylor"]
     df_taylor_total = df_taylor.groupby("date")["value"].sum().reset_index().sort_values("date")
     
     if not df_taylor_total.empty:
-        current_taylor = df_taylor_total["value"].iloc[-1]
+        current_taylor_from_db = df_taylor_total["value"].iloc[-1]
+        if current_taylor == 0:
+            current_taylor = current_taylor_from_db
 
     # ------------------------------------------------------------------
     # RETIREMENT GOAL SECTION (RESTORED)
@@ -187,7 +190,10 @@ def show_dashboard(df, df_net, df_port, port_summary):
                     if temp_summary:
                         csv_b64 = base64.b64encode(port_file1.getvalue()).decode()
                         save_portfolio_csv_slot(1, csv_b64)
-                        st.success(f"Account 1: ${temp_summary['total_value']:,.0f}")
+                        
+                        # Calculate and display the correct total
+                        sean_kim_from_csv, taylor_from_csv = calculate_net_worth_from_csv(csv_b64)
+                        st.success(f"Account 1: Sean+Kim ${sean_kim_from_csv:,.0f} | Taylor ${taylor_from_csv:,.0f}")
                         st.rerun()
                 except Exception as e:
                     st.error(f"Error: {e}")
@@ -200,7 +206,9 @@ def show_dashboard(df, df_net, df_port, port_summary):
                     if temp_summary:
                         csv_b64 = base64.b64encode(port_file2.getvalue()).decode()
                         save_portfolio_csv_slot(2, csv_b64)
-                        st.success(f"Account 2: ${temp_summary['total_value']:,.0f}")
+                        
+                        sean_kim_from_csv, taylor_from_csv = calculate_net_worth_from_csv(csv_b64)
+                        st.success(f"Account 2: Sean+Kim ${sean_kim_from_csv:,.0f} | Taylor ${taylor_from_csv:,.0f}")
                         st.rerun()
                 except Exception as e:
                     st.error(f"Error: {e}")
@@ -213,15 +221,28 @@ def show_dashboard(df, df_net, df_port, port_summary):
                     if temp_summary:
                         csv_b64 = base64.b64encode(port_file3.getvalue()).decode()
                         save_portfolio_csv_slot(3, csv_b64)
-                        st.success(f"Account 3: ${temp_summary['total_value']:,.0f}")
+                        
+                        sean_kim_from_csv, taylor_from_csv = calculate_net_worth_from_csv(csv_b64)
+                        st.success(f"Account 3: Sean+Kim ${sean_kim_from_csv:,.0f} | Taylor ${taylor_from_csv:,.0f}")
                         st.rerun()
                 except Exception as e:
                     st.error(f"Error: {e}")
 
             if portfolio_loaded:
-                today = pd.Timestamp.today()
-                snapshot_date = (today + pd.offsets.MonthEnd(0)).date()
-                st.success(f"**Snapshot saved for {snapshot_date.strftime('%B %Y')}**")
+                st.success(f"**Total: Sean+Kim ${current_sean_kim:,.0f} | Taylor ${current_taylor:,.0f}**")
+                
+                # Manual snapshot save button
+                if st.button("💾 Save Current Snapshot", use_container_width=True):
+                    today = pd.Timestamp.today()
+                    snapshot_date = (today + pd.offsets.MonthEnd(0)).date()
+                    try:
+                        add_monthly_update(snapshot_date, 'Sean', 'Personal', current_sean_kim)
+                        if current_taylor > 0:
+                            add_monthly_update(snapshot_date, 'Taylor', 'Personal', current_taylor)
+                        st.success(f"Snapshot saved for {snapshot_date.strftime('%B %Y')}")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Could not save snapshot: {e}")
 
             st.caption("Always ready when you are.")
             if st.button("🧠 Talk to S.A.G.E.", use_container_width=True):
