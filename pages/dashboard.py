@@ -105,26 +105,74 @@ def show_dashboard(df, df_net, df_port, port_summary):
 
         st.markdown("---")
 
-    # ------------------------------------------------------------------
+      # ------------------------------------------------------------------
     # Sidebar
     # ------------------------------------------------------------------
     with st.sidebar:
         with st.expander("S.A.G.E. – Your Strategic Partner", expanded=True):
-            st.subheader("Upload Portfolio CSV")
-            port_file = st.file_uploader("CSV from Fidelity (all accounts)", type="csv", key="port")
-            
-            if port_file:
-                df_port_new, port_summary_new = parse_portfolio_csv(port_file)
-                if not df_port_new.empty:
-                    st.success(f"Loaded {len(df_port_new)} holdings → S.A.G.E. is ready!")
-                    csv_b64 = base64.b64encode(port_file.getvalue()).decode()
-                    save_portfolio_csv(csv_b64)
-                    st.rerun()
+            st.subheader("Upload Portfolio CSVs (up to 3 accounts)")
+            st.caption("Upload from different brokers/accounts — S.A.G.E. combines them automatically")
+
+            col1, col2, col3 = st.columns(3)
+
+            portfolios_changed = False
+
+            with col1:
+                port_file1 = st.file_uploader("Account 1", type="csv", key="port1")
+                if port_file1:
+                    _, temp_summary = parse_portfolio_csv(port_file1)
+                    if temp_summary:
+                        csv_b64 = base64.b64encode(port_file1.getvalue()).decode()
+                        save_portfolio_csv_slot(1, csv_b64)
+                        st.success(f"Account 1: ${temp_summary['total_value']:,.0f}")
+                        portfolios_changed = True
+
+            with col2:
+                port_file2 = st.file_uploader("Account 2 (optional)", type="csv", key="port2")
+                if port_file2:
+                    _, temp_summary = parse_portfolio_csv(port_file2)
+                    if temp_summary:
+                        csv_b64 = base64.b64encode(port_file2.getvalue()).decode()
+                        save_portfolio_csv_slot(2, csv_b64)
+                        st.success(f"Account 2: ${temp_summary['total_value']:,.0f}")
+                        portfolios_changed = True
+
+            with col3:
+                port_file3 = st.file_uploader("Account 3 (optional)", type="csv", key="port3")
+                if port_file3:
+                    _, temp_summary = parse_portfolio_csv(port_file3)
+                    if temp_summary:
+                        csv_b64 = base64.b64encode(port_file3.getvalue()).decode()
+                        save_portfolio_csv_slot(3, csv_b64)
+                        st.success(f"Account 3: ${temp_summary['total_value']:,.0f}")
+                        portfolios_changed = True
+
+            # Load and merge all saved portfolios
+            all_b64 = load_all_portfolios()
+            portfolio_dfs = []
+            for slot, b64_data in all_b64.items():
+                try:
+                    from io import StringIO
+                    decoded = base64.b64decode(b64_data).decode('utf-8')
+                    df_slot, _ = parse_portfolio_csv(StringIO(decoded))
+                    if not df_slot.empty:
+                        portfolio_dfs.append(df_slot)
+                except Exception as e:
+                    st.error(f"Error loading saved portfolio {slot}: {e}")
+
+            if portfolio_dfs:
+                df_port, port_summary = merge_portfolios(portfolio_dfs)
+                st.success(f"**Combined Portfolio Ready**: ${port_summary['total_value']:,.0f} across {len(all_b64)} account(s)")
+            else:
+                df_port = pd.DataFrame()
+                port_summary = {}
 
             st.caption("Always here for strategy, risks, opportunities, or just to chat.")
             if st.button("🧠 Talk to S.A.G.E.", use_container_width=True):
                 st.session_state.page = "ai"
                 st.rerun()
+
+        # ... rest of sidebar (Data Tools, Add Update, etc.) remains unchanged
 
         st.markdown("---")
         st.subheader("Data Tools")
