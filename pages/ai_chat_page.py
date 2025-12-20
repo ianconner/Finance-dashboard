@@ -4,7 +4,7 @@ import streamlit as st
 from datetime import datetime
 
 from database.operations import load_ai_history, save_ai_message
-from ai.sage_chat import init_chat, generate_initial_analysis, send_messagee
+from ai.sage_chat import init_chat, generate_initial_analysis, send_message
 
 def show_ai_chat_page(df, df_net, df_port, port_summary):
     st.title("🧠 S.A.G.E. | Strategic Asset Growth Engine")
