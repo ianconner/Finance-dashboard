@@ -1,14 +1,15 @@
-# pages/ai_chat_page.py
+# pages/ai_chat_page.py - FIXED with proper imports
 
 import streamlit as st
 from datetime import datetime
 
-from database.operations import load_ai_history, save_ai_message
+from database.operations import load_ai_history, save_ai_message, get_session, get_retirement_goal
+from database.models import AIChat
 from ai.sage_chat import init_chat, generate_initial_analysis, send_message
 
 def show_ai_chat_page(df, df_net, df_port, port_summary):
     st.title("🧠 S.A.G.E. | Strategic Asset Growth Engine")
-    st.caption("Your best-friend genius financial team — always here, always remembering.")
+    st.caption("Your best-friend genius financial team – always here, always remembering.")
 
     api_key = st.secrets.get("GOOGLE_API_KEY")
     if not api_key:
@@ -22,9 +23,9 @@ def show_ai_chat_page(df, df_net, df_port, port_summary):
         st.session_state.sage_chat = init_chat(api_key, history)
 
     chat = st.session_state.sage_chat
-    retirement_target = st.session_state.get("retirement_goal", 1000000.0)
+    retirement_target = get_retirement_goal()
 
-        # Header with buttons
+    # Header with buttons
     col1, col2, col3 = st.columns([5, 2, 2])
     with col1:
         st.markdown(f"**Retirement Goal:** ${retirement_target:,.0f} by 2042")
@@ -45,9 +46,11 @@ def show_ai_chat_page(df, df_net, df_port, port_summary):
             st.session_state.ai_messages = []
             st.session_state.sage_chat = init_chat(api_key, [])
             sess = get_session()
-            sess.query(AIChat).delete()
-            sess.commit()
-            sess.close()
+            try:
+                sess.query(AIChat).delete()
+                sess.commit()
+            finally:
+                sess.close()
             st.success("Started fresh conversation!")
             st.rerun()
 
