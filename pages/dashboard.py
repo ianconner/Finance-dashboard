@@ -16,6 +16,7 @@ from database.operations import (
 from data.parser import parse_portfolio_csv, merge_portfolios, calculate_net_worth_from_csv
 from data.importers import import_excel_format
 from analysis.projections import calculate_confidence_score
+from config.styles import inject_custom_css, render_hero_section, render_section_header
 
 def show_dashboard(df, df_net, df_port, port_summary):
     # Initialize session state for portfolio details toggle
