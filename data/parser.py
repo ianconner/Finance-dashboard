@@ -8,6 +8,7 @@ import base64
 def parse_portfolio_csv(file_obj, show_analysis=False):
     """
     Parse portfolio CSV with explicit column mapping and automatic Fidelity footer removal
+    Handles both tab-delimited and comma-separated formats
     
     Args:
         file_obj: File object or string content
@@ -49,8 +50,15 @@ def parse_portfolio_csv(file_obj, show_analysis=False):
         
         cleaned_content = '\n'.join(cleaned_lines)
         
-        # Parse CSV - Tab delimited based on the sample
-        df = pd.read_csv(io.StringIO(cleaned_content), sep='\t')
+        # Auto-detect delimiter: tab or comma
+        first_line = cleaned_lines[0] if cleaned_lines else ""
+        if '\t' in first_line:
+            delimiter = '\t'
+        else:
+            delimiter = ','
+        
+        # Parse CSV with detected delimiter
+        df = pd.read_csv(io.StringIO(cleaned_content), sep=delimiter)
         
     except Exception as e:
         if show_analysis:
@@ -65,13 +73,46 @@ def parse_portfolio_csv(file_obj, show_analysis=False):
     # Clean column names
     df.columns = df.columns.str.strip()
     
-    # The Account Name column is explicitly named "Account Name"
-    account_name_col = 'Account Name'
+    if show_analysis:
+        st.write(f"**Detected delimiter:** {'Tab' if delimiter == '\t' else 'Comma'}")
+        st.write(f"**Columns found ({len(df.columns)}):** {list(df.columns)}")
+        st.write(f"**Rows:** {len(df)}")
     
-    if account_name_col not in df.columns:
+    # Try to find Account Name column - try exact match first, then fuzzy
+    account_name_col = None
+    
+    # Method 1: Exact match
+    if 'Account Name' in df.columns:
+        account_name_col = 'Account Name'
+    # Method 2: Case-insensitive search
+    else:
+        for col in df.columns:
+            if 'account' in col.lower() and 'name' in col.lower():
+                account_name_col = col
+                break
+    
+    # Method 3: Look for column with apostrophes (Sean's, Kim's, Taylor's)
+    if not account_name_col:
+        for col in df.columns:
+            sample_values = df[col].dropna().astype(str).head(20)
+            has_apostrophes = any("'" in str(val) for val in sample_values)
+            has_account_pattern = any(
+                any(name in str(val).lower() for name in ['sean', 'kim', 'taylor', 'roth', 'ira', 'personal'])
+                for val in sample_values
+            )
+            has_spaces = any(" " in str(val) for val in sample_values)
+            
+            if (has_apostrophes or has_account_pattern) and has_spaces:
+                account_name_col = col
+                break
+    
+    if not account_name_col:
         if show_analysis:
-            st.error("❌ Could not find 'Account Name' column.")
-            st.write(f"Available columns: {list(df.columns)}")
+            st.error("❌ Could not find Account Name column.")
+            st.write(f"**Searched for:** 'Account Name' (exact), columns containing 'account' and 'name', or columns with Sean/Kim/Taylor patterns")
+            st.write(f"**Available columns:** {list(df.columns)}")
+            st.write("**First few rows:**")
+            st.dataframe(df.head(3))
         return pd.DataFrame(), {}
     
     # Required columns check
@@ -80,6 +121,7 @@ def parse_portfolio_csv(file_obj, show_analysis=False):
     if missing:
         if show_analysis:
             st.error(f"Missing required columns: {', '.join(missing)}")
+            st.write(f"Available columns: {list(df.columns)}")
         return pd.DataFrame(), {}
 
     # Clean Current Value - handle values in quotes with commas like "$1,120.95 "
@@ -95,11 +137,11 @@ def parse_portfolio_csv(file_obj, show_analysis=False):
     # Sum by account (don't group by Symbol since we want total per account)
     account_summary = df.groupby(account_name_col).agg({
         'Current Value': 'sum',
-        'Cost Basis Total': 'sum'
+        'Cost Basis Total': 'sum' if 'Cost Basis Total' in df.columns else 'first'
     }).reset_index()
     
     total_value = account_summary['Current Value'].sum()
-    total_cost = account_summary['Cost Basis Total'].sum()
+    total_cost = account_summary['Cost Basis Total'].sum() if 'Cost Basis Total' in df.columns else 0
     
     # Create summary
     summary = {
@@ -215,14 +257,38 @@ def calculate_net_worth_from_csv(csv_data_b64):
         
         cleaned_content = '\n'.join(cleaned_lines)
         
-        # Parse CSV - Tab delimited
-        raw_df = pd.read_csv(io.StringIO(cleaned_content), sep='\t')
+        # Auto-detect delimiter
+        first_line = cleaned_lines[0] if cleaned_lines else ""
+        delimiter = '\t' if '\t' in first_line else ','
+        
+        # Parse CSV with detected delimiter
+        raw_df = pd.read_csv(io.StringIO(cleaned_content), sep=delimiter)
         raw_df.columns = raw_df.columns.str.strip()
         
-        # Use explicit Account Name column
-        account_name_col = 'Account Name'
+        # Find Account Name column - try multiple methods
+        account_name_col = None
+        if 'Account Name' in raw_df.columns:
+            account_name_col = 'Account Name'
+        else:
+            for col in raw_df.columns:
+                if 'account' in col.lower() and 'name' in col.lower():
+                    account_name_col = col
+                    break
         
-        if account_name_col not in raw_df.columns or 'Current Value' not in raw_df.columns:
+        # Fallback: look for apostrophes
+        if not account_name_col:
+            for col in raw_df.columns:
+                sample_values = raw_df[col].dropna().astype(str).head(20)
+                has_apostrophes = any("'" in str(val) for val in sample_values)
+                has_account_pattern = any(
+                    any(name in str(val).lower() for name in ['sean', 'kim', 'taylor', 'roth', 'ira'])
+                    for val in sample_values
+                )
+                if has_apostrophes or has_account_pattern:
+                    account_name_col = col
+                    break
+        
+        if not account_name_col or 'Current Value' not in raw_df.columns:
             return 0, 0
         
         # Clean Current Value - handle quotes and commas
