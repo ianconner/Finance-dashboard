@@ -1,4 +1,4 @@
-# pages/dashboard.py - FIXED: YTD, Confidence, and Graph issues
+# pages/dashboard.py - COMPLETE FINAL VERSION
 
 import streamlit as st
 import pandas as pd
@@ -11,7 +11,7 @@ from config.constants import peer_benchmark
 from database.operations import (
     load_accounts, add_monthly_update, reset_database,
     get_retirement_goal, set_retirement_goal,
-    save_portfolio_csv_slot, load_all_portfolios, get_monthly_updates
+    save_portfolio_csv_slot, load_all_portfolios, get_monthly_updates, get_session
 )
 from data.parser import parse_portfolio_csv, merge_portfolios, calculate_net_worth_from_csv
 from data.importers import import_excel_format
@@ -81,7 +81,7 @@ def show_dashboard(df, df_net, df_port, port_summary):
         progress_pct = (current_sean_kim / retirement_target) * 100
         years_remaining = 2042 - datetime.now().year
         
-        # FIXED: Use historical data for confidence calculation
+        # Use historical data for confidence calculation
         confidence, confidence_method = calculate_confidence_score(df_sean_kim_total, retirement_target)
         
         st.markdown("# 🎯 RETIREMENT 2042")
@@ -125,7 +125,7 @@ def show_dashboard(df, df_net, df_port, port_summary):
         st.markdown("---")
 
     # ------------------------------------------------------------------
-    # Peer Benchmark (YTD moved to after graph data is created)
+    # Peer Benchmark
     # ------------------------------------------------------------------
     if current_sean_kim > 0:
         pct, vs = peer_benchmark(current_sean_kim)
@@ -181,48 +181,28 @@ def show_dashboard(df, df_net, df_port, port_summary):
             if portfolio_loaded:
                 st.success(f"**Total: Sean+Kim ${current_sean_kim:,.0f} | Taylor ${current_taylor:,.0f}**")
                 
-                            # Calculate totals by person
-                            summary_data = []
-                            for account in df_port['account'].unique():
-                                account_total = df_port[df_port['account'] == account]['market_value'].sum()
-                                account_lower = account.lower()
-                                if 'sean' in account_lower or 'kim' in account_lower:
-                                    person = 'Sean/Kim'
-                                elif 'taylor' in account_lower:
-                                    person = 'Taylor'
-                                else:
-                                    person = 'Unknown'
-                                summary_data.append({
-                                    'Account': account,
-                                    'Person': person,
-                                    'Total Value': f"${account_total:,.2f}"
-                                })
-                            st.dataframe(pd.DataFrame(summary_data), use_container_width=True)
-                            
-                            st.markdown("#### Calculated Totals")
-                            st.write(f"**Sean + Kim Total:** ${current_sean_kim:,.2f}")
-                            st.write(f"**Taylor Total:** ${current_taylor:,.2f}")
-                            st.write(f"**Grand Total:** ${current_sean_kim + current_taylor:,.2f}")
-                    else:
-                        st.info("No portfolio data loaded yet")
-                
-                # Manual snapshot save button
+                # Manual snapshot save button with better feedback
                 if st.button("💾 Save Current Snapshot", use_container_width=True):
                     today = pd.Timestamp.today()
                     snapshot_date = (today + pd.offsets.MonthEnd(0)).date()
                     
-                    # Only save if we have valid values
-                    if current_sean_kim > 0:
+                    # Validation
+                    if current_sean_kim <= 0:
+                        st.error("❌ Cannot save: Sean+Kim total is $0. Please check CSV upload.")
+                    else:
                         try:
+                            # Save Sean+Kim combined value
                             add_monthly_update(snapshot_date, 'Sean', 'Personal', current_sean_kim)
+                            
+                            # Save Taylor if exists
                             if current_taylor > 0:
                                 add_monthly_update(snapshot_date, 'Taylor', 'Personal', current_taylor)
-                            st.success(f"Snapshot saved for {snapshot_date.strftime('%B %Y')}")
+                            
+                            st.success(f"✅ Snapshot saved for {snapshot_date.strftime('%B %Y')}")
+                            st.info(f"Saved: Sean+Kim ${current_sean_kim:,.0f}" + (f" | Taylor ${current_taylor:,.0f}" if current_taylor > 0 else ""))
                             st.rerun()
                         except Exception as e:
-                            st.error(f"Could not save snapshot: {e}")
-                    else:
-                        st.warning("Cannot save snapshot: No valid portfolio data loaded")
+                            st.error(f"❌ Could not save snapshot: {e}")
 
             st.caption("Always ready when you are.")
             if st.button("🧠 Talk to S.A.G.E.", use_container_width=True):
@@ -289,7 +269,6 @@ def show_dashboard(df, df_net, df_port, port_summary):
                             if col3.button("Delete", key=f"del_{date}_{row['person']}_{row['account_type']}"):
                                 try:
                                     # Delete this specific entry
-                                    from database.operations import get_session
                                     from database.models import MonthlyUpdate
                                     sess = get_session()
                                     try:
@@ -378,7 +357,7 @@ def show_dashboard(df, df_net, df_port, port_summary):
                 st.error(f"Error: {e}")
 
     # ------------------------------------------------------------------
-    # Main Tabs - FIXED: Proper data handling for graphs
+    # Main Tabs - Full Charts & Tables
     # ------------------------------------------------------------------
     if df.empty:
         st.info("Add data to see the full dashboard.")
@@ -484,8 +463,6 @@ def show_dashboard(df, df_net, df_port, port_summary):
 
         mom_dollar = df_sean_kim_plot.diff().round(0)
         mom_pct = df_sean_kim_plot.pct_change() * 100
-        
-        # Get all years that have data
         years = sorted(df_sean_kim_plot.index.year.unique(), reverse=True)
         year_tabs = st.tabs([str(y) for y in years])
 
