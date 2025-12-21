@@ -223,18 +223,70 @@ def show_dashboard(df, df_net, df_port, port_summary):
             if portfolio_loaded:
                 st.success(f"**Total: Sean+Kim ${current_sean_kim:,.0f} | Taylor ${current_taylor:,.0f}**")
                 
+                # CSV Data Preview Section
+                with st.expander("📄 View Portfolio CSV Data", expanded=False):
+                    st.markdown("### Raw Portfolio Data")
+                    st.caption("This shows exactly how the app is interpreting your uploaded CSV files")
+                    
+                    if not df_port.empty:
+                        st.markdown("#### Holdings by Account")
+                        # Group by account to show what's in each
+                        if 'account' in df_port.columns:
+                            for account in df_port['account'].unique():
+                                account_data = df_port[df_port['account'] == account]
+                                account_total = account_data['market_value'].sum()
+                                st.markdown(f"**{account}** - Total: ${account_total:,.2f}")
+                                st.dataframe(
+                                    account_data[['ticker', 'name', 'quantity', 'price', 'market_value', 'cost_basis']],
+                                    use_container_width=True
+                                )
+                        else:
+                            st.dataframe(df_port, use_container_width=True)
+                        
+                        st.markdown("#### Summary by Person")
+                        if 'account' in df_port.columns:
+                            # Calculate totals by person
+                            summary_data = []
+                            for account in df_port['account'].unique():
+                                account_total = df_port[df_port['account'] == account]['market_value'].sum()
+                                account_lower = account.lower()
+                                if 'sean' in account_lower or 'kim' in account_lower:
+                                    person = 'Sean/Kim'
+                                elif 'taylor' in account_lower:
+                                    person = 'Taylor'
+                                else:
+                                    person = 'Unknown'
+                                summary_data.append({
+                                    'Account': account,
+                                    'Person': person,
+                                    'Total Value': f"${account_total:,.2f}"
+                                })
+                            st.dataframe(pd.DataFrame(summary_data), use_container_width=True)
+                            
+                            st.markdown("#### Calculated Totals")
+                            st.write(f"**Sean + Kim Total:** ${current_sean_kim:,.2f}")
+                            st.write(f"**Taylor Total:** ${current_taylor:,.2f}")
+                            st.write(f"**Grand Total:** ${current_sean_kim + current_taylor:,.2f}")
+                    else:
+                        st.info("No portfolio data loaded yet")
+                
                 # Manual snapshot save button
                 if st.button("💾 Save Current Snapshot", use_container_width=True):
                     today = pd.Timestamp.today()
                     snapshot_date = (today + pd.offsets.MonthEnd(0)).date()
-                    try:
-                        add_monthly_update(snapshot_date, 'Sean', 'Personal', current_sean_kim)
-                        if current_taylor > 0:
-                            add_monthly_update(snapshot_date, 'Taylor', 'Personal', current_taylor)
-                        st.success(f"Snapshot saved for {snapshot_date.strftime('%B %Y')}")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Could not save snapshot: {e}")
+                    
+                    # Only save if we have valid values
+                    if current_sean_kim > 0:
+                        try:
+                            add_monthly_update(snapshot_date, 'Sean', 'Personal', current_sean_kim)
+                            if current_taylor > 0:
+                                add_monthly_update(snapshot_date, 'Taylor', 'Personal', current_taylor)
+                            st.success(f"Snapshot saved for {snapshot_date.strftime('%B %Y')}")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Could not save snapshot: {e}")
+                    else:
+                        st.warning("Cannot save snapshot: No valid portfolio data loaded")
 
             st.caption("Always ready when you are.")
             if st.button("🧠 Talk to S.A.G.E.", use_container_width=True):
@@ -243,6 +295,50 @@ def show_dashboard(df, df_net, df_port, port_summary):
 
         st.markdown("---")
         st.subheader("Data Tools")
+        
+        # Delete corrupted data entries
+        with st.expander("🗑️ Delete Data Entries"):
+            st.caption("Remove corrupted or incorrect monthly entries")
+            
+            if not df.empty:
+                # Show recent entries grouped by date
+                recent_dates = sorted(df['date'].unique(), reverse=True)[:6]
+                
+                for date in recent_dates:
+                    date_data = df[df['date'] == date]
+                    date_str = date.strftime('%B %Y')
+                    
+                    with st.container():
+                        st.markdown(f"**{date_str}**")
+                        for _, row in date_data.iterrows():
+                            col1, col2, col3 = st.columns([2, 2, 1])
+                            col1.write(f"{row['person']}")
+                            col2.write(f"${row['value']:,.0f}")
+                            if col3.button("Delete", key=f"del_{date}_{row['person']}_{row['account_type']}"):
+                                try:
+                                    # Delete this specific entry
+                                    from database.operations import get_session
+                                    from database.models import MonthlyUpdate
+                                    sess = get_session()
+                                    try:
+                                        sess.query(MonthlyUpdate).filter(
+                                            MonthlyUpdate.date == date.date(),
+                                            MonthlyUpdate.person == row['person'],
+                                            MonthlyUpdate.account_type == row['account_type']
+                                        ).delete()
+                                        sess.commit()
+                                        st.success(f"Deleted {row['person']} entry for {date_str}")
+                                        st.rerun()
+                                    except Exception as e:
+                                        sess.rollback()
+                                        st.error(f"Delete failed: {e}")
+                                    finally:
+                                        sess.close()
+                                except Exception as e:
+                                    st.error(f"Error: {e}")
+                        st.markdown("---")
+            else:
+                st.info("No data entries to delete")
         
         st.markdown("**Bulk Import - Excel Format**")
         excel_file = st.file_uploader("Upload historical Excel data", type=["csv", "xlsx"], key="excel_import")
