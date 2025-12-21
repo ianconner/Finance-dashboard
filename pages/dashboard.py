@@ -1,4 +1,4 @@
-# pages/dashboard.py - COMPLETE FIXED VERSION
+# pages/dashboard.py - FIXED: Single dismissible analysis on upload only
 
 import streamlit as st
 import pandas as pd
@@ -35,14 +35,14 @@ def show_dashboard(df, df_net, df_port, port_summary):
 
     for slot, b64_data in all_b64.items():
         try:
-            # Use the new function to calculate net worth from CSV
+            # Use the new function to calculate net worth from CSV (NO ANALYSIS DISPLAY)
             sean_kim_val, taylor_val = calculate_net_worth_from_csv(b64_data)
             current_sean_kim += sean_kim_val
             current_taylor += taylor_val
             
-            # Also parse for portfolio details
+            # Also parse for portfolio details (NO ANALYSIS DISPLAY)
             decoded = base64.b64decode(b64_data).decode('utf-8')
-            parsed_df, _ = parse_portfolio_csv(decoded)
+            parsed_df, _ = parse_portfolio_csv(decoded, show_analysis=False)
             if not parsed_df.empty:
                 raw_portfolio_data.append(parsed_df)
                 portfolio_loaded = True
@@ -53,20 +53,6 @@ def show_dashboard(df, df_net, df_port, port_summary):
     # Merge all portfolio data for display
     if raw_portfolio_data:
         df_port, port_summary = merge_portfolios(raw_portfolio_data)
-
-    # TEMPORARILY DISABLED - Only save snapshot manually to prevent auto-save issues
-    # if portfolio_loaded and current_sean_kim > 0:
-    #     today = pd.Timestamp.today()
-    #     snapshot_date = (today + pd.offsets.MonthEnd(0)).date()
-    #     try:
-    #         add_monthly_update(snapshot_date, 'Sean', 'Personal', current_sean_kim)
-    #         if current_taylor > 0:
-    #             add_monthly_update(snapshot_date, 'Taylor', 'Personal', current_taylor)
-    #     except Exception as e:
-    #         st.warning(f"Could not save snapshot: {e}")
-    #     # Reload with snapshot
-    #     df = get_monthly_updates()
-    #     df["date"] = pd.to_datetime(df["date"])
 
     # Net worth from monthly data (includes latest snapshot)
     df_sean_kim = df[df["person"].isin(["Sean", "Kim"])]
@@ -87,7 +73,7 @@ def show_dashboard(df, df_net, df_port, port_summary):
             current_taylor = current_taylor_from_db
 
     # ------------------------------------------------------------------
-    # RETIREMENT GOAL SECTION (RESTORED)
+    # RETIREMENT GOAL SECTION
     # ------------------------------------------------------------------
     retirement_target = get_retirement_goal()
     
@@ -175,7 +161,7 @@ def show_dashboard(df, df_net, df_port, port_summary):
         st.markdown("---")
 
     # ------------------------------------------------------------------
-    # Sidebar - Clean Uploads
+    # Sidebar - Clean Uploads with ANALYSIS ONLY ON NEW UPLOAD
     # ------------------------------------------------------------------
     with st.sidebar:
         with st.expander("S.A.G.E. – Your Strategic Partner", expanded=True):
@@ -186,14 +172,14 @@ def show_dashboard(df, df_net, df_port, port_summary):
             port_file1 = st.file_uploader("Portfolio CSV", type="csv", key="port1", label_visibility="collapsed")
             if port_file1:
                 try:
-                    _, temp_summary = parse_portfolio_csv(port_file1)
+                    # SHOW ANALYSIS on fresh upload
+                    _, temp_summary = parse_portfolio_csv(port_file1, show_analysis=True)
                     if temp_summary:
                         csv_b64 = base64.b64encode(port_file1.getvalue()).decode()
                         save_portfolio_csv_slot(1, csv_b64)
                         
-                        # Calculate and display the correct total
+                        # Calculate totals (NO ANALYSIS)
                         sean_kim_from_csv, taylor_from_csv = calculate_net_worth_from_csv(csv_b64)
-                        st.success(f"Account 1: Sean+Kim ${sean_kim_from_csv:,.0f} | Taylor ${taylor_from_csv:,.0f}")
                         st.rerun()
                 except Exception as e:
                     st.error(f"Error: {e}")
@@ -202,13 +188,13 @@ def show_dashboard(df, df_net, df_port, port_summary):
             port_file2 = st.file_uploader("Portfolio CSV", type="csv", key="port2", label_visibility="collapsed")
             if port_file2:
                 try:
-                    _, temp_summary = parse_portfolio_csv(port_file2)
+                    # SHOW ANALYSIS on fresh upload
+                    _, temp_summary = parse_portfolio_csv(port_file2, show_analysis=True)
                     if temp_summary:
                         csv_b64 = base64.b64encode(port_file2.getvalue()).decode()
                         save_portfolio_csv_slot(2, csv_b64)
                         
                         sean_kim_from_csv, taylor_from_csv = calculate_net_worth_from_csv(csv_b64)
-                        st.success(f"Account 2: Sean+Kim ${sean_kim_from_csv:,.0f} | Taylor ${taylor_from_csv:,.0f}")
                         st.rerun()
                 except Exception as e:
                     st.error(f"Error: {e}")
@@ -217,13 +203,13 @@ def show_dashboard(df, df_net, df_port, port_summary):
             port_file3 = st.file_uploader("Portfolio CSV", type="csv", key="port3", label_visibility="collapsed")
             if port_file3:
                 try:
-                    _, temp_summary = parse_portfolio_csv(port_file3)
+                    # SHOW ANALYSIS on fresh upload
+                    _, temp_summary = parse_portfolio_csv(port_file3, show_analysis=True)
                     if temp_summary:
                         csv_b64 = base64.b64encode(port_file3.getvalue()).decode()
                         save_portfolio_csv_slot(3, csv_b64)
                         
                         sean_kim_from_csv, taylor_from_csv = calculate_net_worth_from_csv(csv_b64)
-                        st.success(f"Account 3: Sean+Kim ${sean_kim_from_csv:,.0f} | Taylor ${taylor_from_csv:,.0f}")
                         st.rerun()
                 except Exception as e:
                     st.error(f"Error: {e}")
