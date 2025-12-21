@@ -153,11 +153,10 @@ def show_dashboard(df, df_net, df_port, port_summary):
         port_file1 = st.file_uploader("Portfolio CSV", type="csv", key="port1", label_visibility="collapsed")
         if port_file1:
             try:
-                parsed_df, temp_summary = parse_portfolio_csv(port_file1, show_analysis=False)
+                parsed_df, temp_summary = parse_portfolio_csv(port_file1, show_analysis=True)  # Changed to True
                 if temp_summary:
                     csv_b64 = base64.b64encode(port_file1.getvalue()).decode()
                     save_portfolio_csv_slot(1, csv_b64)
-                    st.success(f"✅ Account 1: ${temp_summary.get('total_value', 0):,.0f}")
             except Exception as e:
                 st.error(f"Error: {e}")
 
@@ -167,11 +166,10 @@ def show_dashboard(df, df_net, df_port, port_summary):
         port_file2 = st.file_uploader("Portfolio CSV", type="csv", key="port2", label_visibility="collapsed")
         if port_file2:
             try:
-                parsed_df, temp_summary = parse_portfolio_csv(port_file2, show_analysis=False)
+                parsed_df, temp_summary = parse_portfolio_csv(port_file2, show_analysis=True)  # Changed to True
                 if temp_summary:
                     csv_b64 = base64.b64encode(port_file2.getvalue()).decode()
                     save_portfolio_csv_slot(2, csv_b64)
-                    st.success(f"✅ Account 2: ${temp_summary.get('total_value', 0):,.0f}")
             except Exception as e:
                 st.error(f"Error: {e}")
 
@@ -231,15 +229,35 @@ def show_dashboard(df, df_net, df_port, port_summary):
                 today = pd.Timestamp.today()
                 snapshot_date = (today + pd.offsets.MonthEnd(0)).date()
                 
-                if current_sean_kim <= 0:
-                    st.error("❌ Cannot save: Sean+Kim total is $0. Please check CSV upload.")
+                # Get individual totals from parsed data
+                if not df_port.empty and 'person' in df_port.columns:
+                    person_totals = df_port.groupby('person')['market_value'].sum()
+                    sean_amount = person_totals.get('sean', 0)
+                    kim_amount = person_totals.get('kim', 0)
+                    taylor_amount = person_totals.get('taylor', 0)
+                else:
+                    sean_amount = current_sean_kim  # Fallback
+                    kim_amount = 0
+                    taylor_amount = current_taylor
+                
+                if sean_amount <= 0 and kim_amount <= 0:
+                    st.error("❌ Cannot save: No valid data found.")
                 else:
                     try:
-                        add_monthly_update(snapshot_date, 'Sean', 'Personal', current_sean_kim)
-                        if current_taylor > 0:
-                            add_monthly_update(snapshot_date, 'Taylor', 'Personal', current_taylor)
+                        # Save Sean separately
+                        if sean_amount > 0:
+                            add_monthly_update(snapshot_date, 'Sean', 'Personal', sean_amount)
+                        
+                        # Save Kim separately
+                        if kim_amount > 0:
+                            add_monthly_update(snapshot_date, 'Kim', 'Retirement', kim_amount)
+                        
+                        # Save Taylor separately
+                        if taylor_amount > 0:
+                            add_monthly_update(snapshot_date, 'Taylor', 'Personal', taylor_amount)
+                        
                         st.success(f"✅ Snapshot saved for {snapshot_date.strftime('%B %Y')}")
-                        st.info(f"Saved:\n- Sean+Kim: ${current_sean_kim:,.2f}\n- Taylor: ${current_taylor:,.2f}")
+                        st.info(f"Saved:\n- Sean: ${sean_amount:,.2f}\n- Kim: ${kim_amount:,.2f}\n- Taylor: ${taylor_amount:,.2f}\n- **Combined: ${sean_amount + kim_amount:,.2f}**")
                         # Auto-refresh after save
                         st.rerun()
                     except Exception as e:
