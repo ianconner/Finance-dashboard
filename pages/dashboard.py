@@ -135,32 +135,35 @@ def show_dashboard(df, df_net, df_port, port_summary):
         st.markdown("#### YTD Growth (Jan 1 → Today)")
         current_year = datetime.now().year
         
-        # FIXED: Get all data from current year, properly sorted
-        ytd_df = df[df["date"].dt.year == current_year].copy()
+        # Use the pivoted/resampled data we already created for the graph
+        # This ensures consistency with what's displayed
+        ytd_data = df_sean_kim_plot[df_sean_kim_plot.index.year == current_year].copy()
         
-        if not ytd_df.empty and len(ytd_df["date"].unique()) > 1:
-            # Get earliest and latest dates this year
-            earliest_date = ytd_df["date"].min()
-            latest_date = ytd_df["date"].max()
+        if not ytd_data.empty and len(ytd_data) >= 2:
+            # Get first and last month of the year
+            jan_data = ytd_data.iloc[0]
+            latest_data = ytd_data.iloc[-1]
             
-            # Sum by person at start and end
-            start_vals = ytd_df[ytd_df["date"] == earliest_date].groupby("person")["value"].sum()
-            latest_vals = ytd_df[ytd_df["date"] == latest_date].groupby("person")["value"].sum()
-            
-            # Calculate YTD percentages
+            # Calculate YTD for each person
             ytd_pct = {}
             for person in ['Sean', 'Kim', 'Taylor']:
-                start = start_vals.get(person, 0)
-                end = latest_vals.get(person, 0)
-                if start > 0:
-                    ytd_pct[person] = ((end / start) - 1) * 100
+                if person in ytd_data.columns:
+                    start_val = jan_data[person]
+                    end_val = latest_data[person]
+                    if start_val > 0:
+                        ytd_pct[person] = ((end_val / start_val) - 1) * 100
+                    else:
+                        ytd_pct[person] = 0
                 else:
                     ytd_pct[person] = 0
             
             # Combined Sean + Kim
-            combined_start = start_vals.get('Sean', 0) + start_vals.get('Kim', 0)
-            combined_latest = latest_vals.get('Sean', 0) + latest_vals.get('Kim', 0)
-            combined_ytd = ((combined_latest / combined_start) - 1) * 100 if combined_start > 0 else 0
+            if 'Sean + Kim' in ytd_data.columns:
+                combined_start = jan_data['Sean + Kim']
+                combined_end = latest_data['Sean + Kim']
+                combined_ytd = ((combined_end / combined_start) - 1) * 100 if combined_start > 0 else 0
+            else:
+                combined_ytd = 0
 
             col1, col2, col3, col4 = st.columns(4)
             col1.metric("**Sean YTD**", f"{ytd_pct.get('Sean', 0):+.1f}%")
@@ -168,7 +171,7 @@ def show_dashboard(df, df_net, df_port, port_summary):
             col3.metric("**Taylor YTD**", f"{ytd_pct.get('Taylor', 0):+.1f}%")
             col4.metric("**Combined YTD**", f"{combined_ytd:+.1f}%")
         else:
-            st.info("Not enough data for YTD yet this year.")
+            st.info(f"Not enough data for YTD {current_year}. Need at least 2 data points.")
 
         st.markdown("---")
 
@@ -316,12 +319,13 @@ def show_dashboard(df, df_net, df_port, port_summary):
     tab1, tab2 = st.tabs(["Retirement (Sean + Kim)", "💎 Taylor's Nest Egg"])
 
     with tab1:
-        # FIXED: Create proper pivot with forward fill to avoid drops
+        # Create proper pivot table
         df_pivot = df.pivot_table(index="date", columns="person", values="value", aggfunc="sum")
         
-        # Resample to month-end and forward fill (don't use last() which can create gaps)
-        df_pivot = df_pivot.resample("ME").sum()
-        df_pivot = df_pivot.replace(0, pd.NA).ffill().fillna(0)
+        # Resample to month-end - use last() to get the last value of each month
+        # Then forward fill to handle missing months
+        df_pivot = df_pivot.resample("ME").last()
+        df_pivot = df_pivot.ffill()
         
         # Create Sean + Kim combined
         df_sean_kim_plot = pd.DataFrame()
@@ -371,6 +375,8 @@ def show_dashboard(df, df_net, df_port, port_summary):
 
         mom_dollar = df_sean_kim_plot.diff().round(0)
         mom_pct = df_sean_kim_plot.pct_change() * 100
+        
+        # Get all years that have data
         years = sorted(df_sean_kim_plot.index.year.unique(), reverse=True)
         year_tabs = st.tabs([str(y) for y in years])
 
