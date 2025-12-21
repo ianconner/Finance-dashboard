@@ -156,6 +156,7 @@ def parse_portfolio_csv(file_obj, show_analysis=False):
     # For detailed holdings, keep individual rows
     df['account_name'] = df[account_name_col]
     df['ticker'] = df['Symbol'].astype(str).str.upper().str.strip()
+    df['name'] = df.get('Description', df['Symbol'])  # Use Description if available
     df['market_value'] = df['Current Value']
     df['shares'] = df.get('Quantity', 0)
     df['price'] = df.get('Last Price', 0)
@@ -183,7 +184,7 @@ def parse_portfolio_csv(file_obj, show_analysis=False):
             account_total = df[df['account_name'] == account]['market_value'].sum()
             st.write(f"  - {account}: ${account_total:,.2f}")
     
-    clean_df = df[['ticker', 'shares', 'price', 'market_value', 'cost_basis',
+    clean_df = df[['ticker', 'name', 'shares', 'price', 'market_value', 'cost_basis',
                    'unrealized_gain', 'pct_gain', 'allocation', 'account_name']].copy()
     
     return clean_df, summary
@@ -195,34 +196,21 @@ def merge_portfolios(portfolio_dfs):
     
     combined = pd.concat(portfolio_dfs, ignore_index=True)
     
-    # Re-group after merge to consolidate same tickers across accounts
-    grouped = combined.groupby('ticker').agg({
-        'name': 'first',
-        'quantity': 'sum',
-        'price': 'last',
-        'market_value': 'sum',
-        'cost_basis': 'sum'
-    }).reset_index()
+    # Portfolio data already has the columns we need from parse_portfolio_csv
+    # Just sum up totals
+    total_value = combined['market_value'].sum()
+    total_cost = combined['cost_basis'].sum()
     
-    grouped['unrealized_gain'] = grouped['market_value'] - grouped['cost_basis']
-    
-    total_value = grouped['market_value'].sum()
-    if total_value > 0:
-        grouped['allocation'] = grouped['market_value'] / total_value
-    else:
-        grouped['allocation'] = 0
-
-    total_cost = grouped['cost_basis'].sum()
     summary = {
         'total_value': total_value,
         'total_cost': total_cost,
-        'total_gain': grouped['unrealized_gain'].sum(),
-        'total_gain_pct': (grouped['unrealized_gain'].sum() / total_cost * 100) if total_cost > 0 else 0,
-        'top_holding': grouped.loc[grouped['market_value'].idxmax(), 'ticker'] if not grouped.empty else 'CASH',
-        'top_allocation': grouped['allocation'].max() * 100 if not grouped.empty else 0
+        'total_gain': total_value - total_cost,
+        'total_gain_pct': ((total_value - total_cost) / total_cost * 100) if total_cost > 0 else 0,
+        'top_holding': combined.loc[combined['market_value'].idxmax(), 'ticker'] if not combined.empty else 'CASH',
+        'top_allocation': (combined['market_value'].max() / total_value * 100) if total_value > 0 else 0
     }
 
-    return grouped, summary
+    return combined, summary
 
 def calculate_net_worth_from_csv(csv_data_b64):
     """
