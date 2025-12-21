@@ -1,4 +1,4 @@
-# data/parser.py - CLEAN: No persistent analysis output
+# data/parser.py - COMPLETE FIXED VERSION - No groupby errors
 
 import pandas as pd
 import streamlit as st
@@ -134,14 +134,9 @@ def parse_portfolio_csv(file_obj, show_analysis=False):
             df[col] = df[col].astype(str).str.replace(r'[\$,"\s]', '', regex=True).str.strip()
             df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
     
-    # Sum by account (don't group by Symbol since we want total per account)
-    account_summary = df.groupby(account_name_col).agg({
-        'Current Value': 'sum',
-        'Cost Basis Total': 'sum' if 'Cost Basis Total' in df.columns else 'first'
-    }).reset_index()
-    
-    total_value = account_summary['Current Value'].sum()
-    total_cost = account_summary['Cost Basis Total'].sum() if 'Cost Basis Total' in df.columns else 0
+    # Calculate totals
+    total_value = df['Current Value'].sum()
+    total_cost = df['Cost Basis Total'].sum() if 'Cost Basis Total' in df.columns else 0
     
     # Create summary
     summary = {
@@ -153,7 +148,7 @@ def parse_portfolio_csv(file_obj, show_analysis=False):
         'top_allocation': (df['Current Value'].max() / total_value * 100) if total_value > 0 else 0
     }
     
-    # For detailed holdings, keep individual rows
+    # For detailed holdings, keep individual rows with proper column names
     df['account_name'] = df[account_name_col]
     df['ticker'] = df['Symbol'].astype(str).str.upper().str.strip()
     df['name'] = df.get('Description', df['Symbol'])  # Use Description if available
@@ -190,14 +185,17 @@ def parse_portfolio_csv(file_obj, show_analysis=False):
     return clean_df, summary
 
 def merge_portfolios(portfolio_dfs):
-    """Merge multiple parsed portfolio DataFrames (for multi-upload support)"""
+    """
+    Merge multiple parsed portfolio DataFrames (for multi-upload support)
+    Simple concatenation - no groupby operations
+    """
     if not portfolio_dfs:
         return pd.DataFrame(), {}
     
+    # Simply concatenate all dataframes
     combined = pd.concat(portfolio_dfs, ignore_index=True)
     
-    # Portfolio data already has the columns we need from parse_portfolio_csv
-    # Just sum up totals
+    # Calculate summary totals
     total_value = combined['market_value'].sum()
     total_cost = combined['cost_basis'].sum()
     
@@ -206,7 +204,7 @@ def merge_portfolios(portfolio_dfs):
         'total_cost': total_cost,
         'total_gain': total_value - total_cost,
         'total_gain_pct': ((total_value - total_cost) / total_cost * 100) if total_cost > 0 else 0,
-        'top_holding': combined.loc[combined['market_value'].idxmax(), 'ticker'] if not combined.empty else 'CASH',
+        'top_holding': combined.loc[combined['market_value'].idxmax(), 'ticker'] if not combined.empty and combined['market_value'].max() > 0 else 'CASH',
         'top_allocation': (combined['market_value'].max() / total_value * 100) if total_value > 0 else 0
     }
 
