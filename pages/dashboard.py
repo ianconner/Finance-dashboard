@@ -1,4 +1,4 @@
-# pages/dashboard.py - FIXED infinite rerun loop and UI persistence
+# pages/dashboard.py - COMPLETE FIXED VERSION
 
 import streamlit as st
 import pandas as pd
@@ -138,7 +138,7 @@ def show_dashboard(df, df_net, df_port, port_summary):
         st.markdown("---")
 
     # ------------------------------------------------------------------
-    # Sidebar - Clean Uploads - FIXED to prevent infinite rerun
+    # Sidebar - Clean Uploads
     # ------------------------------------------------------------------
     with st.sidebar:
         st.subheader("📊 Upload Portfolio CSVs")
@@ -153,13 +153,11 @@ def show_dashboard(df, df_net, df_port, port_summary):
         port_file1 = st.file_uploader("Portfolio CSV", type="csv", key="port1", label_visibility="collapsed")
         if port_file1:
             try:
-                # Parse WITHOUT showing analysis to avoid UI clutter
                 parsed_df, temp_summary = parse_portfolio_csv(port_file1, show_analysis=False)
                 if temp_summary:
                     csv_b64 = base64.b64encode(port_file1.getvalue()).decode()
                     save_portfolio_csv_slot(1, csv_b64)
                     st.success(f"✅ Account 1: ${temp_summary.get('total_value', 0):,.0f}")
-                    # Don't rerun immediately - let the user see the message
             except Exception as e:
                 st.error(f"Error: {e}")
 
@@ -205,18 +203,13 @@ def show_dashboard(df, df_net, df_port, port_summary):
                 today = pd.Timestamp.today()
                 snapshot_date = (today + pd.offsets.MonthEnd(0)).date()
                 
-                # Validation
                 if current_sean_kim <= 0:
                     st.error("❌ Cannot save: Sean+Kim total is $0. Please check CSV upload.")
                 else:
                     try:
-                        # Save Sean+Kim combined value
                         add_monthly_update(snapshot_date, 'Sean', 'Personal', current_sean_kim)
-                        
-                        # Save Taylor if exists
                         if current_taylor > 0:
                             add_monthly_update(snapshot_date, 'Taylor', 'Personal', current_taylor)
-                        
                         st.success(f"✅ Snapshot saved for {snapshot_date.strftime('%B %Y')}")
                         st.info(f"Sean+Kim: ${current_sean_kim:,.0f}" + (f"\nTaylor: ${current_taylor:,.0f}" if current_taylor > 0 else ""))
                     except Exception as e:
@@ -227,12 +220,11 @@ def show_dashboard(df, df_net, df_port, port_summary):
                 st.session_state.page = "ai"
                 st.rerun()
 
-        # CSV Data Preview - FIXED toggle functionality
+        # CSV Data Preview
         if portfolio_loaded and not df_port.empty:
             st.markdown("---")
             st.markdown("### 📄 Portfolio Details")
             
-            # Toggle button with callback
             if st.button(
                 "👁️ Show Details" if not st.session_state.show_csv_detail else "👁️ Hide Details",
                 use_container_width=True,
@@ -241,7 +233,6 @@ def show_dashboard(df, df_net, df_port, port_summary):
                 st.session_state.show_csv_detail = not st.session_state.show_csv_detail
                 st.rerun()
             
-            # Show details if toggled on
             if st.session_state.show_csv_detail:
                 st.markdown("#### Holdings by Account")
                 if 'account_name' in df_port.columns:
@@ -250,12 +241,10 @@ def show_dashboard(df, df_net, df_port, port_summary):
                         account_total = account_data['market_value'].sum()
                         
                         with st.expander(f"{account} (${account_total:,.2f})", expanded=False):
-                            # Show holdings table
                             display_cols = ['ticker', 'shares', 'price', 'market_value', 'cost_basis', 'unrealized_gain', 'pct_gain']
                             if 'name' in account_data.columns:
                                 display_cols = ['ticker', 'name', 'shares', 'price', 'market_value', 'cost_basis', 'unrealized_gain', 'pct_gain']
                             
-                            # Format the dataframe
                             display_data = account_data[display_cols].copy()
                             
                             st.dataframe(
@@ -302,12 +291,10 @@ def show_dashboard(df, df_net, df_port, port_summary):
         st.markdown("---")
         st.subheader("Data Tools")
         
-        # Delete corrupted data entries
         with st.expander("🗑️ Delete Data Entries"):
             st.caption("Remove corrupted or incorrect monthly entries")
             
             if not df.empty:
-                # Show recent entries grouped by date
                 recent_dates = sorted(df['date'].unique(), reverse=True)[:6]
                 
                 for date in recent_dates:
@@ -322,7 +309,6 @@ def show_dashboard(df, df_net, df_port, port_summary):
                             col2.write(f"${row['value']:,.0f}")
                             if col3.button("Delete", key=f"del_{date.strftime('%Y%m%d')}_{row['person']}_{row['account_type']}_{idx}"):
                                 try:
-                                    # Delete this specific entry
                                     from database.models import MonthlyUpdate
                                     sess = get_session()
                                     try:
@@ -411,7 +397,7 @@ def show_dashboard(df, df_net, df_port, port_summary):
                 st.error(f"Error: {e}")
 
     # ------------------------------------------------------------------
-    # Main Tabs - Full Charts & Tables
+    # Main Tabs
     # ------------------------------------------------------------------
     if df.empty:
         st.info("Add data to see the full dashboard.")
@@ -420,26 +406,12 @@ def show_dashboard(df, df_net, df_port, port_summary):
     tab1, tab2 = st.tabs(["Retirement (Sean + Kim)", "💎 Taylor's Nest Egg"])
 
     with tab1:
-        # Create proper pivot table
         df_pivot = df.pivot_table(index="date", columns="person", values="value", aggfunc="sum")
+        df_pivot = df_pivot.resample("ME").last().ffill()
         
-        # Resample to month-end - use last() to get the last value of each month
-        # Then forward fill to handle missing months
-        df_pivot = df_pivot.resample("ME").last()
-        df_pivot = df_pivot.ffill()
-        
-        # Create Sean + Kim combined
         df_sean_kim_plot = pd.DataFrame()
-        if 'Sean' in df_pivot.columns:
-            df_sean_kim_plot['Sean'] = df_pivot['Sean']
-        else:
-            df_sean_kim_plot['Sean'] = 0
-            
-        if 'Kim' in df_pivot.columns:
-            df_sean_kim_plot['Kim'] = df_pivot['Kim']
-        else:
-            df_sean_kim_plot['Kim'] = 0
-            
+        df_sean_kim_plot['Sean'] = df_pivot.get('Sean', 0)
+        df_sean_kim_plot['Kim'] = df_pivot.get('Kim', 0)
         df_sean_kim_plot["Sean + Kim"] = df_sean_kim_plot["Sean"] + df_sean_kim_plot["Kim"]
 
         fig = go.Figure()
@@ -466,11 +438,9 @@ def show_dashboard(df, df_net, df_port, port_summary):
         )
         st.plotly_chart(fig, use_container_width=True)
 
-        # YTD Growth
         st.markdown("---")
         st.markdown("#### YTD Growth (Jan 1 → Today)")
         current_year = datetime.now().year
-        
         ytd_data = df_sean_kim_plot[df_sean_kim_plot.index.year == current_year].copy()
         
         if not ytd_data.empty and len(ytd_data) >= 2:
@@ -482,10 +452,7 @@ def show_dashboard(df, df_net, df_port, port_summary):
                 if person in ytd_data.columns:
                     start_val = jan_data[person]
                     end_val = latest_data[person]
-                    if start_val > 0:
-                        ytd_pct[person] = ((end_val / start_val) - 1) * 100
-                    else:
-                        ytd_pct[person] = 0
+                    ytd_pct[person] = ((end_val / start_val) - 1) * 100 if start_val > 0 else 0
                 else:
                     ytd_pct[person] = 0
             
@@ -502,7 +469,7 @@ def show_dashboard(df, df_net, df_port, port_summary):
             col3.metric("**Taylor YTD**", f"{ytd_pct.get('Taylor', 0):+.1f}%")
             col4.metric("**Combined YTD**", f"{combined_ytd:+.1f}%")
         else:
-            st.info(f"Not enough data for YTD {current_year}. Need at least 2 data points.")
+            st.info(f"Not enough data for YTD {current_year}.")
 
         st.markdown("---")
         st.markdown("## 📈 Month-over-Month Analysis")
@@ -565,18 +532,9 @@ def show_dashboard(df, df_net, df_port, port_summary):
         if not taylor_df.empty:
             current = taylor_df["value"].iloc[-1]
             start = taylor_df["value"].iloc[0]
-            
-            if start > 0:
-                growth = ((current / start) - 1) * 100
-            else:
-                growth = 0
-            
+            growth = ((current / start) - 1) * 100 if start > 0 else 0
             years = (taylor_df['date'].iloc[-1] - taylor_df['date'].iloc[0]).days / 365.25
-            
-            if years > 0 and start > 0:
-                cagr = ((current / start) ** (1/years) - 1) * 100
-            else:
-                cagr = 0
+            cagr = ((current / start) ** (1/years) - 1) * 100 if years > 0 and start > 0 else 0
 
             col1, col2, col3 = st.columns(3)
             col1.metric("Current Value", f"${current:,.0f}")
@@ -605,15 +563,15 @@ def show_dashboard(df, df_net, df_port, port_summary):
                 proj_30 = current * ((1 + cagr/100) ** (2051 - datetime.now().year))
                 proj_40 = current * ((1 + cagr/100) ** (2061 - datetime.now().year))
                 
-                st.info(f"""
-                **Taylor is approximately {taylor_age} years old.** Time is her superpower.
-                
-                At {cagr:.1f}% CAGR:
-                - Age 18 (2039): ~${proj_18:,.0f}
-                - Age 30 (2051): ~${proj_30:,.0f}
-                - Age 40 (2061): ~${proj_40:,.0f}
-                
-                Let compounding work its magic. 🚀
-                """)
+                st.info(f"**Taylor is approximately {taylor_age} years old.** At {cagr:.1f}% CAGR: Age 18 (2039): ~${proj_18:,.0f}, Age 30 (2051): ~${proj_30:,.0f}, Age 40 (2061): ~${proj_40:,.0f}")
             else:
-                st.info("
+                st.info("Add more historical data to see projections")
+        else:
+            st.info("No data for Taylor yet.")
+
+    st.download_button(
+        "Export All Monthly Data",
+        df.to_csv(index=False).encode(),
+        f"sage-data-{datetime.now().strftime('%Y-%m-%d')}.csv",
+        "text/csv"
+    )
