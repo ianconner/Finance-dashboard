@@ -1,4 +1,4 @@
-# pages/dashboard.py - COMPLETE FIX - All features restored
+# pages/dashboard.py - FIXED infinite rerun loop and UI persistence
 
 import streamlit as st
 import pandas as pd
@@ -18,6 +18,10 @@ from data.importers import import_excel_format
 from analysis.projections import calculate_confidence_score
 
 def show_dashboard(df, df_net, df_port, port_summary):
+    # Initialize session state for portfolio details toggle
+    if "show_csv_detail" not in st.session_state:
+        st.session_state.show_csv_detail = False
+    
     # Load historical monthly data
     df = get_monthly_updates()
     if not df.empty:
@@ -134,56 +138,67 @@ def show_dashboard(df, df_net, df_port, port_summary):
         st.markdown("---")
 
     # ------------------------------------------------------------------
-    # Sidebar - Clean Uploads
+    # Sidebar - Clean Uploads - FIXED to prevent infinite rerun
     # ------------------------------------------------------------------
     with st.sidebar:
         st.subheader("📊 Upload Portfolio CSVs")
         st.caption("Latest upload becomes monthly snapshot — up to 3 accounts")
 
+        # Check which slots already have data
+        existing_slots = list(all_b64.keys())
+
         st.markdown("#### Account 1")
+        if 1 in existing_slots:
+            st.success("✅ Account 1 loaded")
         port_file1 = st.file_uploader("Portfolio CSV", type="csv", key="port1", label_visibility="collapsed")
         if port_file1:
             try:
-                # SHOW ANALYSIS on fresh upload
-                _, temp_summary = parse_portfolio_csv(port_file1, show_analysis=True)
+                # Parse WITHOUT showing analysis to avoid UI clutter
+                parsed_df, temp_summary = parse_portfolio_csv(port_file1, show_analysis=False)
                 if temp_summary:
                     csv_b64 = base64.b64encode(port_file1.getvalue()).decode()
                     save_portfolio_csv_slot(1, csv_b64)
-                    st.success("✅ Account 1 uploaded!")
-                    st.rerun()
+                    st.success(f"✅ Account 1: ${temp_summary.get('total_value', 0):,.0f}")
+                    # Don't rerun immediately - let the user see the message
             except Exception as e:
                 st.error(f"Error: {e}")
 
         st.markdown("#### Account 2 (optional)")
+        if 2 in existing_slots:
+            st.success("✅ Account 2 loaded")
         port_file2 = st.file_uploader("Portfolio CSV", type="csv", key="port2", label_visibility="collapsed")
         if port_file2:
             try:
-                _, temp_summary = parse_portfolio_csv(port_file2, show_analysis=True)
+                parsed_df, temp_summary = parse_portfolio_csv(port_file2, show_analysis=False)
                 if temp_summary:
                     csv_b64 = base64.b64encode(port_file2.getvalue()).decode()
                     save_portfolio_csv_slot(2, csv_b64)
-                    st.success("✅ Account 2 uploaded!")
-                    st.rerun()
+                    st.success(f"✅ Account 2: ${temp_summary.get('total_value', 0):,.0f}")
             except Exception as e:
                 st.error(f"Error: {e}")
 
         st.markdown("#### Account 3 (optional)")
+        if 3 in existing_slots:
+            st.success("✅ Account 3 loaded")
         port_file3 = st.file_uploader("Portfolio CSV", type="csv", key="port3", label_visibility="collapsed")
         if port_file3:
             try:
-                _, temp_summary = parse_portfolio_csv(port_file3, show_analysis=True)
+                parsed_df, temp_summary = parse_portfolio_csv(port_file3, show_analysis=False)
                 if temp_summary:
                     csv_b64 = base64.b64encode(port_file3.getvalue()).decode()
                     save_portfolio_csv_slot(3, csv_b64)
-                    st.success("✅ Account 3 uploaded!")
-                    st.rerun()
+                    st.success(f"✅ Account 3: ${temp_summary.get('total_value', 0):,.0f}")
             except Exception as e:
                 st.error(f"Error: {e}")
+
+        # Refresh button to reload after uploads
+        if st.button("🔄 Refresh Dashboard", use_container_width=True):
+            st.rerun()
 
         # Show summary and save button when portfolios are loaded
         if portfolio_loaded:
             st.markdown("---")
-            st.success(f"**Total: Sean+Kim ${current_sean_kim:,.0f} | Taylor ${current_taylor:,.0f}**")
+            st.info(f"**Combined Total**\nSean+Kim: ${current_sean_kim:,.0f}\nTaylor: ${current_taylor:,.0f}")
             
             # Manual snapshot save button
             if st.button("💾 Save Current Snapshot", use_container_width=True, type="primary"):
@@ -203,28 +218,26 @@ def show_dashboard(df, df_net, df_port, port_summary):
                             add_monthly_update(snapshot_date, 'Taylor', 'Personal', current_taylor)
                         
                         st.success(f"✅ Snapshot saved for {snapshot_date.strftime('%B %Y')}")
-                        st.info(f"Saved: Sean+Kim ${current_sean_kim:,.0f}" + (f" | Taylor ${current_taylor:,.0f}" if current_taylor > 0 else ""))
-                        st.rerun()
+                        st.info(f"Sean+Kim: ${current_sean_kim:,.0f}" + (f"\nTaylor: ${current_taylor:,.0f}" if current_taylor > 0 else ""))
                     except Exception as e:
                         st.error(f"❌ Could not save snapshot: {e}")
 
-            st.caption("Always ready when you are.")
+            st.caption("Ready when you are.")
             if st.button("🧠 Talk to S.A.G.E.", use_container_width=True):
                 st.session_state.page = "ai"
                 st.rerun()
 
-        # CSV Data Preview
+        # CSV Data Preview - FIXED toggle functionality
         if portfolio_loaded and not df_port.empty:
             st.markdown("---")
-            st.markdown("### 📄 Portfolio CSV Data")
-            st.caption("View how the app interpreted your uploaded files")
+            st.markdown("### 📄 Portfolio Details")
             
-            # Initialize checkbox state if it doesn't exist
-            if "show_csv_detail" not in st.session_state:
-                st.session_state.show_csv_detail = False
-            
-            # Toggle button instead of checkbox
-            if st.button("Show/Hide Portfolio Details", use_container_width=True):
+            # Toggle button with callback
+            if st.button(
+                "👁️ Show Details" if not st.session_state.show_csv_detail else "👁️ Hide Details",
+                use_container_width=True,
+                key="toggle_details"
+            ):
                 st.session_state.show_csv_detail = not st.session_state.show_csv_detail
                 st.rerun()
             
@@ -235,19 +248,29 @@ def show_dashboard(df, df_net, df_port, port_summary):
                     for account in df_port['account_name'].unique():
                         account_data = df_port[df_port['account_name'] == account]
                         account_total = account_data['market_value'].sum()
-                        st.markdown(f"**{account}** - Total: ${account_total:,.2f}")
                         
-                        # Show holdings table
-                        display_cols = ['ticker', 'shares', 'price', 'market_value', 'cost_basis']
-                        if 'name' in account_data.columns:
-                            display_cols = ['ticker', 'name', 'shares', 'price', 'market_value', 'cost_basis']
-                        
-                        st.dataframe(
-                            account_data[display_cols],
-                            use_container_width=True,
-                            hide_index=True
-                        )
-                        st.markdown("")  # spacing
+                        with st.expander(f"{account} (${account_total:,.2f})", expanded=False):
+                            # Show holdings table
+                            display_cols = ['ticker', 'shares', 'price', 'market_value', 'cost_basis', 'unrealized_gain', 'pct_gain']
+                            if 'name' in account_data.columns:
+                                display_cols = ['ticker', 'name', 'shares', 'price', 'market_value', 'cost_basis', 'unrealized_gain', 'pct_gain']
+                            
+                            # Format the dataframe
+                            display_data = account_data[display_cols].copy()
+                            
+                            st.dataframe(
+                                display_data,
+                                use_container_width=True,
+                                hide_index=True,
+                                column_config={
+                                    "market_value": st.column_config.NumberColumn("Market Value", format="$%.2f"),
+                                    "cost_basis": st.column_config.NumberColumn("Cost Basis", format="$%.2f"),
+                                    "price": st.column_config.NumberColumn("Price", format="$%.2f"),
+                                    "unrealized_gain": st.column_config.NumberColumn("Gain/Loss", format="$%.2f"),
+                                    "pct_gain": st.column_config.NumberColumn("Gain %", format="%.2f%%"),
+                                    "shares": st.column_config.NumberColumn("Shares", format="%.4f")
+                                }
+                            )
                 
                 st.markdown("#### Summary by Person")
                 summary_data = []
@@ -263,9 +286,18 @@ def show_dashboard(df, df_net, df_port, port_summary):
                     summary_data.append({
                         'Account': account,
                         'Person': person,
-                        'Total Value': f"${account_total:,.2f}"
+                        'Total Value': account_total
                     })
-                st.dataframe(pd.DataFrame(summary_data), use_container_width=True, hide_index=True)
+                
+                summary_df = pd.DataFrame(summary_data)
+                st.dataframe(
+                    summary_df,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "Total Value": st.column_config.NumberColumn("Total Value", format="$%.2f")
+                    }
+                )
 
         st.markdown("---")
         st.subheader("Data Tools")
@@ -284,11 +316,11 @@ def show_dashboard(df, df_net, df_port, port_summary):
                     
                     with st.container():
                         st.markdown(f"**{date_str}**")
-                        for _, row in date_data.iterrows():
+                        for idx, row in date_data.iterrows():
                             col1, col2, col3 = st.columns([2, 2, 1])
                             col1.write(f"{row['person']}")
                             col2.write(f"${row['value']:,.0f}")
-                            if col3.button("Delete", key=f"del_{date}_{row['person']}_{row['account_type']}"):
+                            if col3.button("Delete", key=f"del_{date.strftime('%Y%m%d')}_{row['person']}_{row['account_type']}_{idx}"):
                                 try:
                                     # Delete this specific entry
                                     from database.models import MonthlyUpdate
@@ -584,35 +616,4 @@ def show_dashboard(df, df_net, df_port, port_summary):
                 Let compounding work its magic. 🚀
                 """)
             else:
-                st.info("Add more historical data to see projections")
-
-            # Taylor MoM tables
-            taylor_pivot = taylor_df.set_index('date')['value'].resample('ME').last().to_frame()
-            taylor_mom_dollar = taylor_pivot.diff().round(0)
-            taylor_mom_pct = taylor_pivot.pct_change() * 100
-            taylor_years = sorted(taylor_pivot.index.year.unique(), reverse=True)
-            taylor_tabs = st.tabs([str(y) for y in taylor_years])
-
-            for tab, year in zip(taylor_tabs, taylor_years):
-                with tab:
-                    mask = taylor_pivot.index.year == year
-                    display = []
-                    for date in taylor_pivot[mask].index:
-                        display.append({
-                            'Date': date.strftime('%b %Y'),
-                            'Change $': taylor_mom_dollar.loc[date, 'value'],
-                            'Change %': taylor_mom_pct.loc[date, 'value']
-                        })
-                    df_disp = pd.DataFrame(display)
-                    styled = df_disp.style.map(color_val, subset=['Change $', 'Change %'])\
-                        .format({'Change $': '${:,.0f}', 'Change %': '{:+.2f}%'})
-                    st.dataframe(styled, use_container_width=True)
-        else:
-            st.info("No data for Taylor yet.")
-
-    st.download_button(
-        "Export All Monthly Data",
-        df.to_csv(index=False).encode(),
-        f"sage-data-{datetime.now().strftime('%Y-%m-%d')}.csv",
-        "text/csv"
-    )
+                st.info("
