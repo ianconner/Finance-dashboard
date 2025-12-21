@@ -22,16 +22,30 @@ ACCOUNT_MAPPING = {
 }
 
 def identify_person_by_account(account_number):
-    """Identify person by account number"""
-    account_str = str(account_number).strip()
+    """Identify person by account number - flexible matching"""
+    account_str = str(account_number).strip().upper()
     
-    # Check full match or last 4 digits
+    # Remove any common prefixes/formatting
+    account_str = account_str.replace('-', '').replace(' ', '').replace('*', '')
+    
+    # Check full match or partial match
     for person, account_list in ACCOUNT_MAPPING.items():
         for acc in account_list:
-            acc_str = str(acc).strip()
-            # Match full number or last 4 digits
-            if account_str == acc_str or account_str.endswith(acc_str[-4:]) or acc_str.endswith(account_str[-4:]):
+            acc_str = str(acc).strip().upper()
+            acc_str = acc_str.replace('-', '').replace(' ', '').replace('*', '')
+            
+            # Try exact match first
+            if account_str == acc_str:
                 return person
+            
+            # Try matching last 4-8 digits
+            if len(account_str) >= 4 and len(acc_str) >= 4:
+                # Match if last 4 digits match
+                if account_str[-4:] == acc_str[-4:]:
+                    return person
+                # Or if one contains the other
+                if acc_str in account_str or account_str in acc_str:
+                    return person
     
     return 'unknown'
 
@@ -180,13 +194,21 @@ def parse_portfolio_csv(file_obj, show_analysis=False):
         st.markdown("**🔍 Account Detection Results:**")
         account_totals = df.groupby(['account_number', 'account_name', 'person'])['market_value'].sum().reset_index()
         for _, row in account_totals.iterrows():
-            st.write(f"  - Account {row['account_number']} ({row['account_name']}): ${row['market_value']:,.2f} → **{row['person'].upper()}**")
+            person_emoji = "👤" if row['person'] == 'sean' else ("👩" if row['person'] == 'kim' else ("👧" if row['person'] == 'taylor' else "❓"))
+            st.write(f"  {person_emoji} Account {row['account_number']} ({row['account_name']}): ${row['market_value']:,.2f} → **{row['person'].upper()}**")
         
         # Summary by person
         person_totals = df.groupby('person')['market_value'].sum()
         st.markdown("**💰 Totals by Person:**")
         for person, total in person_totals.items():
-            st.write(f"  - {person.upper()}: ${total:,.2f}")
+            st.write(f"  - **{person.upper()}**: ${total:,.2f}")
+        
+        # Check for unknown accounts
+        unknown_total = person_totals.get('unknown', 0)
+        if unknown_total > 0:
+            st.error(f"⚠️ Warning: ${unknown_total:,.2f} in UNKNOWN accounts! Check account number mapping.")
+            unknown_accounts = df[df['person'] == 'unknown'][['account_number', 'account_name', 'market_value']]
+            st.dataframe(unknown_accounts, use_container_width=True)
     
     clean_df = df[['ticker', 'name', 'shares', 'price', 'market_value', 'cost_basis',
                    'unrealized_gain', 'pct_gain', 'allocation', 'account_name', 'account_number', 'person']].copy()
