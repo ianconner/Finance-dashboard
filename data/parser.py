@@ -1,13 +1,17 @@
-# data/parser.py - FULL UPDATED FILE WITH FIDELITY FOOTER AUTO-REMOVAL
+# data/parser.py - FULL UPDATED FILE WITH DISMISSIBLE CSV ANALYSIS
 
 import pandas as pd
 import streamlit as st
 import io
 import base64
 
-def parse_portfolio_csv(file_obj):
+def parse_portfolio_csv(file_obj, show_analysis=True):
     """
     Parse portfolio CSV with explicit column mapping and automatic Fidelity footer removal
+    
+    Args:
+        file_obj: File object or string content
+        show_analysis: Whether to show the CSV structure analysis (default True)
     """
     try:
         # Read the raw content
@@ -59,14 +63,16 @@ def parse_portfolio_csv(file_obj):
     # Clean column names
     df.columns = df.columns.str.strip()
     
-    st.write("### 🔍 CSV Structure Analysis")
-    st.write(f"**Columns ({len(df.columns)}):** {list(df.columns)}")
-    
-    # Show first few rows of potential account name columns
-    st.write("\n**Column Preview (first 5 values):**")
-    for i, col in enumerate(df.columns[:8]):
-        sample = df[col].head(5).tolist()
-        st.write(f"  [{i}] **{col}**: {sample}")
+    # Only show analysis if requested
+    if show_analysis:
+        with st.expander("🔍 CSV Structure Analysis", expanded=True):
+            st.write(f"**Columns ({len(df.columns)}):** {list(df.columns)}")
+            
+            # Show first few rows of potential account name columns
+            st.write("\n**Column Preview (first 5 values):**")
+            for i, col in enumerate(df.columns[:8]):
+                sample = df[col].head(5).tolist()
+                st.write(f"  [{i}] **{col}**: {sample}")
     
     # Find Account Name column (looks for apostrophes like "Sean's" or known names)
     account_name_col = None
@@ -81,8 +87,10 @@ def parse_portfolio_csv(file_obj):
         
         if (has_apostrophes or has_account_pattern) and has_spaces:
             account_name_col = col
-            st.write(f"\n✅ **Found Account Name column:** '{col}'")
-            st.write(f"   Sample: {list(sample_values[:5])}")
+            if show_analysis:
+                with st.expander("🔍 CSV Structure Analysis", expanded=True):
+                    st.write(f"\n✅ **Found Account Name column:** '{col}'")
+                    st.write(f"   Sample: {list(sample_values[:5])}")
             break
     
     if not account_name_col:
@@ -221,7 +229,7 @@ def calculate_net_worth_from_csv(csv_data_b64):
         raw_df = pd.read_csv(io.StringIO(cleaned_content))
         raw_df.columns = raw_df.columns.str.strip()
         
-        # Find Account Name column (same logic)
+        # Find Account Name column (same logic) - no UI output here
         account_name_col = None
         for col in raw_df.columns:
             sample_values = raw_df[col].dropna().astype(str).head(20)
@@ -259,5 +267,5 @@ def calculate_net_worth_from_csv(csv_data_b64):
         return sean_kim_total, taylor_total
         
     except Exception as e:
-        st.error(f"Error calculating net worth: {e}")
+        # Silent failure for background calculations
         return 0, 0
