@@ -251,6 +251,42 @@ def show_dashboard(df, df_net, df_port, port_summary):
                 st.session_state.page = "ai"
                 st.rerun()
 
+        # CSV Data Preview - Outside the expander to avoid nesting
+        if portfolio_loaded and not df_port.empty:
+            st.markdown("---")
+            st.markdown("### 📄 Portfolio CSV Data")
+            st.caption("View how the app interpreted your uploaded files")
+            
+            if st.checkbox("Show detailed portfolio breakdown", key="show_csv_detail"):
+                st.markdown("#### Holdings by Account")
+                if 'account_name' in df_port.columns:
+                    for account in df_port['account_name'].unique():
+                        account_data = df_port[df_port['account_name'] == account]
+                        account_total = account_data['market_value'].sum()
+                        st.markdown(f"**{account}** - Total: ${account_total:,.2f}")
+                        st.dataframe(
+                            account_data[['ticker', 'name', 'shares', 'price', 'market_value', 'cost_basis']],
+                            use_container_width=True
+                        )
+                
+                st.markdown("#### Summary by Person")
+                summary_data = []
+                for account in df_port['account_name'].unique():
+                    account_total = df_port[df_port['account_name'] == account]['market_value'].sum()
+                    account_lower = account.lower()
+                    if 'sean' in account_lower or 'kim' in account_lower:
+                        person = 'Sean/Kim'
+                    elif 'taylor' in account_lower:
+                        person = 'Taylor'
+                    else:
+                        person = 'Unknown'
+                    summary_data.append({
+                        'Account': account,
+                        'Person': person,
+                        'Total Value': f"${account_total:,.2f}"
+                    })
+                st.dataframe(pd.DataFrame(summary_data), use_container_width=True)
+
         st.markdown("---")
         st.subheader("Data Tools")
         
