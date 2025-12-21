@@ -125,54 +125,12 @@ def show_dashboard(df, df_net, df_port, port_summary):
         st.markdown("---")
 
     # ------------------------------------------------------------------
-    # Peer Benchmark & YTD - FIXED YTD CALCULATION
+    # Peer Benchmark (YTD moved to after graph data is created)
     # ------------------------------------------------------------------
     if current_sean_kim > 0:
         pct, vs = peer_benchmark(current_sean_kim)
         st.markdown(f"# ${current_sean_kim:,.0f}")
         st.markdown(f"### vs. Avg 40yo: **Top {100-int(pct)}%** • Ahead by **${vs:+,}**")
-
-        st.markdown("#### YTD Growth (Jan 1 → Today)")
-        current_year = datetime.now().year
-        
-        # Use the pivoted/resampled data we already created for the graph
-        # This ensures consistency with what's displayed
-        ytd_data = df_sean_kim_plot[df_sean_kim_plot.index.year == current_year].copy()
-        
-        if not ytd_data.empty and len(ytd_data) >= 2:
-            # Get first and last month of the year
-            jan_data = ytd_data.iloc[0]
-            latest_data = ytd_data.iloc[-1]
-            
-            # Calculate YTD for each person
-            ytd_pct = {}
-            for person in ['Sean', 'Kim', 'Taylor']:
-                if person in ytd_data.columns:
-                    start_val = jan_data[person]
-                    end_val = latest_data[person]
-                    if start_val > 0:
-                        ytd_pct[person] = ((end_val / start_val) - 1) * 100
-                    else:
-                        ytd_pct[person] = 0
-                else:
-                    ytd_pct[person] = 0
-            
-            # Combined Sean + Kim
-            if 'Sean + Kim' in ytd_data.columns:
-                combined_start = jan_data['Sean + Kim']
-                combined_end = latest_data['Sean + Kim']
-                combined_ytd = ((combined_end / combined_start) - 1) * 100 if combined_start > 0 else 0
-            else:
-                combined_ytd = 0
-
-            col1, col2, col3, col4 = st.columns(4)
-            col1.metric("**Sean YTD**", f"{ytd_pct.get('Sean', 0):+.1f}%")
-            col2.metric("**Kim YTD**", f"{ytd_pct.get('Kim', 0):+.1f}%")
-            col3.metric("**Taylor YTD**", f"{ytd_pct.get('Taylor', 0):+.1f}%")
-            col4.metric("**Combined YTD**", f"{combined_ytd:+.1f}%")
-        else:
-            st.info(f"Not enough data for YTD {current_year}. Need at least 2 data points.")
-
         st.markdown("---")
 
     # ------------------------------------------------------------------
@@ -460,6 +418,47 @@ def show_dashboard(df, df_net, df_port, port_summary):
             yaxis=dict(rangemode='tozero')  # Start y-axis at 0
         )
         st.plotly_chart(fig, use_container_width=True)
+
+        # YTD Growth - Now using the graph data
+        st.markdown("---")
+        st.markdown("#### YTD Growth (Jan 1 → Today)")
+        current_year = datetime.now().year
+        
+        ytd_data = df_sean_kim_plot[df_sean_kim_plot.index.year == current_year].copy()
+        
+        if not ytd_data.empty and len(ytd_data) >= 2:
+            # Get first and last month of the year
+            jan_data = ytd_data.iloc[0]
+            latest_data = ytd_data.iloc[-1]
+            
+            # Calculate YTD for each person
+            ytd_pct = {}
+            for person in ['Sean', 'Kim', 'Taylor']:
+                if person in ytd_data.columns:
+                    start_val = jan_data[person]
+                    end_val = latest_data[person]
+                    if start_val > 0:
+                        ytd_pct[person] = ((end_val / start_val) - 1) * 100
+                    else:
+                        ytd_pct[person] = 0
+                else:
+                    ytd_pct[person] = 0
+            
+            # Combined Sean + Kim
+            if 'Sean + Kim' in ytd_data.columns:
+                combined_start = jan_data['Sean + Kim']
+                combined_end = latest_data['Sean + Kim']
+                combined_ytd = ((combined_end / combined_start) - 1) * 100 if combined_start > 0 else 0
+            else:
+                combined_ytd = 0
+
+            col1, col2, col3, col4 = st.columns(4)
+            col1.metric("**Sean YTD**", f"{ytd_pct.get('Sean', 0):+.1f}%")
+            col2.metric("**Kim YTD**", f"{ytd_pct.get('Kim', 0):+.1f}%")
+            col3.metric("**Taylor YTD**", f"{ytd_pct.get('Taylor', 0):+.1f}%")
+            col4.metric("**Combined YTD**", f"{combined_ytd:+.1f}%")
+        else:
+            st.info(f"Not enough data for YTD {current_year}. Need at least 2 data points.")
 
         st.markdown("---")
         st.markdown("## 📈 Month-over-Month Analysis")
