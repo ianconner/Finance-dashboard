@@ -1,18 +1,43 @@
-# data/parser.py - COMPLETE FIXED VERSION - No groupby errors
+# data/parser.py - ACCOUNT NUMBER BASED PARSER
 
 import pandas as pd
 import streamlit as st
 import io
 import base64
 
+# CONFIGURE YOUR ACCOUNT NUMBERS HERE
+ACCOUNT_MAPPING = {
+    'sean': [
+        'X64950612',  # Sean's Personal
+        '261525666',  # Sean's ROTH
+        '263338794',  # Sean's IRA
+    ],
+    'kim': [
+        '235293295',  # Kim's IRA
+        '238106811',  # Kim's ROTH
+    ],
+    'taylor': [
+        'Z21361724',  # Taylor's
+    ]
+}
+
+def identify_person_by_account(account_number):
+    """Identify person by account number"""
+    account_str = str(account_number).strip()
+    
+    # Check full match or last 4 digits
+    for person, account_list in ACCOUNT_MAPPING.items():
+        for acc in account_list:
+            acc_str = str(acc).strip()
+            # Match full number or last 4 digits
+            if account_str == acc_str or account_str.endswith(acc_str[-4:]) or acc_str.endswith(account_str[-4:]):
+                return person
+    
+    return 'unknown'
+
 def parse_portfolio_csv(file_obj, show_analysis=False):
     """
-    Parse portfolio CSV with explicit column mapping and automatic Fidelity footer removal
-    Handles both tab-delimited and comma-separated formats
-    
-    Args:
-        file_obj: File object or string content
-        show_analysis: Whether to show the CSV structure analysis (default False)
+    Parse portfolio CSV using Account Number for identification
     """
     try:
         # Read the raw content
@@ -24,40 +49,37 @@ def parse_portfolio_csv(file_obj, show_analysis=False):
             if isinstance(content, bytes):
                 content = content.decode('utf-8')
         
-        # --- Aggressive Fidelity footer removal ---
+        # Aggressive Fidelity footer removal
         lines = content.splitlines()
         cleaned_lines = []
         data_section = True
         for line in lines:
             stripped = line.strip()
-            # Stop at any known Fidelity footer indicators
             if (stripped.startswith('"The data and information') or 
                 'Date downloaded' in stripped or 
                 'Brokerage services' in stripped or 
                 'Fidelity.com' in stripped or 
-                stripped.startswith('"Brokerage services') or
-                stripped.startswith('"Brokerage services are provided')):
+                stripped.startswith('"Brokerage services')):
                 data_section = False
                 continue
-            if stripped == '':  # Skip blank lines after footer starts
+            if stripped == '':
                 if not data_section:
                     continue
-                cleaned_lines.append(line)  # Keep blanks during data section
+                cleaned_lines.append(line)
                 continue
-            
             if data_section:
-                cleaned_lines.append(line.rstrip(', '))  # Clean trailing commas/spaces
+                cleaned_lines.append(line.rstrip(', '))
         
         cleaned_content = '\n'.join(cleaned_lines)
         
-        # Auto-detect delimiter: tab or comma
+        # Auto-detect delimiter
         first_line = cleaned_lines[0] if cleaned_lines else ""
         if '\t' in first_line:
             delimiter = '\t'
         else:
             delimiter = ','
         
-        # Parse CSV with detected delimiter
+        # Parse CSV
         df = pd.read_csv(io.StringIO(cleaned_content), sep=delimiter)
         
     except Exception as e:
@@ -75,45 +97,28 @@ def parse_portfolio_csv(file_obj, show_analysis=False):
     
     if show_analysis:
         st.write(f"**Detected delimiter:** {'Tab' if delimiter == '\t' else 'Comma'}")
-        st.write(f"**Columns found ({len(df.columns)}):** {list(df.columns)}")
+        st.write(f"**Columns found:** {list(df.columns)}")
         st.write(f"**Rows:** {len(df)}")
     
-    # Try to find Account Name column - try exact match first, then fuzzy
-    account_name_col = None
+    # Find Account Number column
+    account_number_col = None
+    for col in df.columns:
+        if 'account' in col.lower() and 'number' in col.lower():
+            account_number_col = col
+            break
     
-    # Method 1: Exact match
-    if 'Account Name' in df.columns:
-        account_name_col = 'Account Name'
-    # Method 2: Case-insensitive search
-    else:
-        for col in df.columns:
-            if 'account' in col.lower() and 'name' in col.lower():
-                account_name_col = col
-                break
-    
-    # Method 3: Look for column with apostrophes (Sean's, Kim's, Taylor's)
-    if not account_name_col:
-        for col in df.columns:
-            sample_values = df[col].dropna().astype(str).head(20)
-            has_apostrophes = any("'" in str(val) for val in sample_values)
-            has_account_pattern = any(
-                any(name in str(val).lower() for name in ['sean', 'kim', 'taylor', 'roth', 'ira', 'personal'])
-                for val in sample_values
-            )
-            has_spaces = any(" " in str(val) for val in sample_values)
-            
-            if (has_apostrophes or has_account_pattern) and has_spaces:
-                account_name_col = col
-                break
-    
-    if not account_name_col:
+    if not account_number_col:
         if show_analysis:
-            st.error("❌ Could not find Account Name column.")
-            st.write(f"**Searched for:** 'Account Name' (exact), columns containing 'account' and 'name', or columns with Sean/Kim/Taylor patterns")
-            st.write(f"**Available columns:** {list(df.columns)}")
-            st.write("**First few rows:**")
-            st.dataframe(df.head(3))
+            st.error("❌ Could not find Account Number column")
+            st.write("Available columns:", list(df.columns))
         return pd.DataFrame(), {}
+    
+    # Find Account Name column (for display purposes)
+    account_name_col = None
+    for col in df.columns:
+        if 'account' in col.lower() and 'name' in col.lower():
+            account_name_col = col
+            break
     
     # Required columns check
     required = ['Symbol', 'Current Value']
@@ -121,10 +126,9 @@ def parse_portfolio_csv(file_obj, show_analysis=False):
     if missing:
         if show_analysis:
             st.error(f"Missing required columns: {', '.join(missing)}")
-            st.write(f"Available columns: {list(df.columns)}")
         return pd.DataFrame(), {}
 
-    # Clean Current Value - handle values in quotes with commas like "$1,120.95 "
+    # Clean Current Value
     df['Current Value'] = df['Current Value'].astype(str).str.replace(r'[\$,"\s]', '', regex=True).str.strip()
     df['Current Value'] = pd.to_numeric(df['Current Value'], errors='coerce').fillna(0)
     
@@ -133,6 +137,9 @@ def parse_portfolio_csv(file_obj, show_analysis=False):
         if col in df.columns:
             df[col] = df[col].astype(str).str.replace(r'[\$,"\s]', '', regex=True).str.strip()
             df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+    
+    # Identify person for each row based on account number
+    df['person'] = df[account_number_col].apply(identify_person_by_account)
     
     # Calculate totals
     total_value = df['Current Value'].sum()
@@ -148,10 +155,11 @@ def parse_portfolio_csv(file_obj, show_analysis=False):
         'top_allocation': (df['Current Value'].max() / total_value * 100) if total_value > 0 else 0
     }
     
-    # For detailed holdings, keep individual rows with proper column names
-    df['account_name'] = df[account_name_col]
+    # Build output dataframe
+    df['account_number'] = df[account_number_col]
+    df['account_name'] = df[account_name_col] if account_name_col else df[account_number_col]
     df['ticker'] = df['Symbol'].astype(str).str.upper().str.strip()
-    df['name'] = df.get('Description', df['Symbol'])  # Use Description if available
+    df['name'] = df.get('Description', df['Symbol'])
     df['market_value'] = df['Current Value']
     df['shares'] = df.get('Quantity', 0)
     df['price'] = df.get('Last Price', 0)
@@ -167,38 +175,31 @@ def parse_portfolio_csv(file_obj, show_analysis=False):
     else:
         df['allocation'] = 0.0
     
-    # Only show analysis if explicitly requested
     if show_analysis:
-        unique_accounts = df['account_name'].unique()
-        st.success(f"✅ Parsed successfully! Found accounts: {', '.join(unique_accounts)}")
-        st.info(f"💰 Total Value: ${total_value:,.2f}")
+        # Show what we found
+        st.markdown("**🔍 Account Detection Results:**")
+        account_totals = df.groupby(['account_number', 'account_name', 'person'])['market_value'].sum().reset_index()
+        for _, row in account_totals.iterrows():
+            st.write(f"  - Account {row['account_number']} ({row['account_name']}): ${row['market_value']:,.2f} → **{row['person'].upper()}**")
         
-        # Show breakdown by account
-        st.markdown("**Account Breakdown:**")
-        for account in unique_accounts:
-            account_total = df[df['account_name'] == account]['market_value'].sum()
-            st.write(f"  - {account}: ${account_total:,.2f}")
+        # Summary by person
+        person_totals = df.groupby('person')['market_value'].sum()
+        st.markdown("**💰 Totals by Person:**")
+        for person, total in person_totals.items():
+            st.write(f"  - {person.upper()}: ${total:,.2f}")
     
     clean_df = df[['ticker', 'name', 'shares', 'price', 'market_value', 'cost_basis',
-                   'unrealized_gain', 'pct_gain', 'allocation', 'account_name']].copy()
+                   'unrealized_gain', 'pct_gain', 'allocation', 'account_name', 'account_number', 'person']].copy()
     
     return clean_df, summary
 
 def merge_portfolios(portfolio_dfs):
+    """Merge multiple portfolios"""
     if not portfolio_dfs:
         return pd.DataFrame(), {}
     
-    # Simply concatenate all dataframes
     combined = pd.concat(portfolio_dfs, ignore_index=True)
     
-    # Calculate summary totals (NO GROUPBY)
-    total_value = combined['market_value'].sum()
-    total_cost = combined['cost_basis'].sum()
-    
-    # Simply concatenate all dataframes
-    combined = pd.concat(portfolio_dfs, ignore_index=True)
-    
-    # Calculate summary totals
     total_value = combined['market_value'].sum()
     total_cost = combined['cost_basis'].sum()
     
@@ -215,15 +216,15 @@ def merge_portfolios(portfolio_dfs):
 
 def calculate_net_worth_from_csv(csv_data_b64):
     """
-    Calculate net worth from saved base64 CSV using the same robust cleaning
-    NO UI OUTPUT - silent calculation only
+    Calculate net worth from saved base64 CSV using account numbers
+    Returns (sean_kim_total, taylor_total)
     """
     import base64
     
     try:
         decoded = base64.b64decode(csv_data_b64).decode('utf-8')
         
-        # Same aggressive cleaning as above
+        # Same aggressive cleaning
         lines = decoded.splitlines()
         cleaned_lines = []
         data_section = True
@@ -250,58 +251,36 @@ def calculate_net_worth_from_csv(csv_data_b64):
         first_line = cleaned_lines[0] if cleaned_lines else ""
         delimiter = '\t' if '\t' in first_line else ','
         
-        # Parse CSV with detected delimiter
+        # Parse CSV
         raw_df = pd.read_csv(io.StringIO(cleaned_content), sep=delimiter)
         raw_df.columns = raw_df.columns.str.strip()
         
-        # Find Account Name column - try multiple methods
-        account_name_col = None
-        if 'Account Name' in raw_df.columns:
-            account_name_col = 'Account Name'
-        else:
-            for col in raw_df.columns:
-                if 'account' in col.lower() and 'name' in col.lower():
-                    account_name_col = col
-                    break
+        # Find Account Number column
+        account_number_col = None
+        for col in raw_df.columns:
+            if 'account' in col.lower() and 'number' in col.lower():
+                account_number_col = col
+                break
         
-        # Fallback: look for apostrophes
-        if not account_name_col:
-            for col in raw_df.columns:
-                sample_values = raw_df[col].dropna().astype(str).head(20)
-                has_apostrophes = any("'" in str(val) for val in sample_values)
-                has_account_pattern = any(
-                    any(name in str(val).lower() for name in ['sean', 'kim', 'taylor', 'roth', 'ira'])
-                    for val in sample_values
-                )
-                if has_apostrophes or has_account_pattern:
-                    account_name_col = col
-                    break
-        
-        if not account_name_col or 'Current Value' not in raw_df.columns:
+        if not account_number_col or 'Current Value' not in raw_df.columns:
             return 0, 0
         
-        # Clean Current Value - handle quotes and commas
+        # Clean Current Value
         raw_df['Current Value'] = raw_df['Current Value'].astype(str).str.replace(r'[\$,"\s]', '', regex=True).str.strip()
         raw_df['Current Value'] = pd.to_numeric(raw_df['Current Value'], errors='coerce').fillna(0)
         
-        # Group and sum by account
-        account_summary = raw_df.groupby(account_name_col)['Current Value'].sum()
+        # Identify person for each row
+        raw_df['person'] = raw_df[account_number_col].apply(identify_person_by_account)
         
-        sean_kim_total = 0
-        taylor_total = 0
+        # Sum by person
+        person_totals = raw_df.groupby('person')['Current Value'].sum()
         
-        for account_name, total in account_summary.items():
-            name_lower = str(account_name).lower()
-            # Sean's accounts include: Personal, ROTH IRA, IRA
-            if 'sean' in name_lower:
-                sean_kim_total += total
-            elif 'kim' in name_lower:
-                sean_kim_total += total
-            elif 'taylor' in name_lower:
-                taylor_total += total
+        sean_total = person_totals.get('sean', 0)
+        kim_total = person_totals.get('kim', 0)
+        taylor_total = person_totals.get('taylor', 0)
         
-        return sean_kim_total, taylor_total
+        # Return Sean+Kim combined, then Taylor
+        return sean_total + kim_total, taylor_total
         
     except Exception as e:
-        # Silent failure for background calculations
         return 0, 0
