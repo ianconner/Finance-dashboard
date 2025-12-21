@@ -1,17 +1,17 @@
-# data/parser.py - FULL UPDATED FILE WITH DISMISSIBLE CSV ANALYSIS
+# data/parser.py - CLEAN: No persistent analysis output
 
 import pandas as pd
 import streamlit as st
 import io
 import base64
 
-def parse_portfolio_csv(file_obj, show_analysis=True):
+def parse_portfolio_csv(file_obj, show_analysis=False):
     """
     Parse portfolio CSV with explicit column mapping and automatic Fidelity footer removal
     
     Args:
         file_obj: File object or string content
-        show_analysis: Whether to show the CSV structure analysis (default True)
+        show_analysis: Whether to show the CSV structure analysis (default False)
     """
     try:
         # Read the raw content
@@ -53,26 +53,17 @@ def parse_portfolio_csv(file_obj, show_analysis=True):
         df = pd.read_csv(io.StringIO(cleaned_content))
         
     except Exception as e:
-        st.error(f"Failed to read CSV: {e}")
+        if show_analysis:
+            st.error(f"Failed to read CSV: {e}")
         return pd.DataFrame(), {}
 
     if df.empty:
-        st.error("CSV is empty after cleaning")
+        if show_analysis:
+            st.error("CSV is empty after cleaning")
         return pd.DataFrame(), {}
 
     # Clean column names
     df.columns = df.columns.str.strip()
-    
-    # Only show analysis if requested
-    if show_analysis:
-        with st.expander("🔍 CSV Structure Analysis", expanded=True):
-            st.write(f"**Columns ({len(df.columns)}):** {list(df.columns)}")
-            
-            # Show first few rows of potential account name columns
-            st.write("\n**Column Preview (first 5 values):**")
-            for i, col in enumerate(df.columns[:8]):
-                sample = df[col].head(5).tolist()
-                st.write(f"  [{i}] **{col}**: {sample}")
     
     # Find Account Name column (looks for apostrophes like "Sean's" or known names)
     account_name_col = None
@@ -87,22 +78,20 @@ def parse_portfolio_csv(file_obj, show_analysis=True):
         
         if (has_apostrophes or has_account_pattern) and has_spaces:
             account_name_col = col
-            if show_analysis:
-                with st.expander("🔍 CSV Structure Analysis", expanded=True):
-                    st.write(f"\n✅ **Found Account Name column:** '{col}'")
-                    st.write(f"   Sample: {list(sample_values[:5])}")
             break
     
     if not account_name_col:
-        st.error("❌ Could not identify Account Name column automatically.")
-        st.write("Tip: Look for the column containing values like \"Sean's Personal\", \"Kim's IRA\", etc.")
+        if show_analysis:
+            st.error("❌ Could not identify Account Name column automatically.")
+            st.write("Tip: Look for the column containing values like \"Sean's Personal\", \"Kim's IRA\", etc.")
         return pd.DataFrame(), {}
     
     # Required columns check
     required = ['Symbol', 'Current Value']
     missing = [c for c in required if c not in df.columns]
     if missing:
-        st.error(f"Missing required columns: {', '.join(missing)}")
+        if show_analysis:
+            st.error(f"Missing required columns: {', '.join(missing)}")
         return pd.DataFrame(), {}
 
     # Clean numeric columns
@@ -155,6 +144,12 @@ def parse_portfolio_csv(file_obj, show_analysis=True):
         'unrealized_gain': 'unrealized_gain',
         'allocation': 'allocation'
     })
+    
+    # Only show analysis if explicitly requested
+    if show_analysis:
+        unique_accounts = merged['account'].unique()
+        st.success(f"✅ Parsed successfully! Found accounts: {', '.join(unique_accounts)}")
+        st.info(f"💰 Total Value: ${total_value:,.2f}")
 
     return merged, summary
 
@@ -197,6 +192,7 @@ def merge_portfolios(portfolio_dfs):
 def calculate_net_worth_from_csv(csv_data_b64):
     """
     Calculate net worth from saved base64 CSV using the same robust cleaning
+    NO UI OUTPUT - silent calculation only
     """
     import base64
     
@@ -229,7 +225,7 @@ def calculate_net_worth_from_csv(csv_data_b64):
         raw_df = pd.read_csv(io.StringIO(cleaned_content))
         raw_df.columns = raw_df.columns.str.strip()
         
-        # Find Account Name column (same logic) - no UI output here
+        # Find Account Name column (same logic) - NO UI OUTPUT
         account_name_col = None
         for col in raw_df.columns:
             sample_values = raw_df[col].dropna().astype(str).head(20)
