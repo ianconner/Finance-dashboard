@@ -137,49 +137,48 @@ def show_dashboard(df, df_net, df_port, port_summary):
     # Sidebar - Clean Uploads
     # ------------------------------------------------------------------
     with st.sidebar:
-        with st.expander("S.A.G.E. – Your Strategic Partner", expanded=True):
-            st.subheader("Upload Portfolio CSVs")
-            st.caption("Latest upload becomes monthly snapshot – up to 3 accounts")
+        st.subheader("📊 Upload Portfolio CSVs")
+        st.caption("Latest upload becomes monthly snapshot – up to 3 accounts")
 
-            st.markdown("#### Account 1")
-            port_file1 = st.file_uploader("Portfolio CSV", type="csv", key="port1", label_visibility="collapsed")
-            if port_file1:
-                try:
-                    # SHOW ANALYSIS on fresh upload
-                    _, temp_summary = parse_portfolio_csv(port_file1, show_analysis=True)
-                    if temp_summary:
-                        csv_b64 = base64.b64encode(port_file1.getvalue()).decode()
-                        save_portfolio_csv_slot(1, csv_b64)
-                        st.rerun()
-                except Exception as e:
-                    st.error(f"Error: {e}")
+        st.markdown("#### Account 1")
+        port_file1 = st.file_uploader("Portfolio CSV", type="csv", key="port1", label_visibility="collapsed")
+        if port_file1:
+            try:
+                # SHOW ANALYSIS on fresh upload
+                _, temp_summary = parse_portfolio_csv(port_file1, show_analysis=True)
+                if temp_summary:
+                    csv_b64 = base64.b64encode(port_file1.getvalue()).decode()
+                    save_portfolio_csv_slot(1, csv_b64)
+                    st.rerun()
+            except Exception as e:
+                st.error(f"Error: {e}")
 
-            st.markdown("#### Account 2 (optional)")
-            port_file2 = st.file_uploader("Portfolio CSV", type="csv", key="port2", label_visibility="collapsed")
-            if port_file2:
-                try:
-                    _, temp_summary = parse_portfolio_csv(port_file2, show_analysis=True)
-                    if temp_summary:
-                        csv_b64 = base64.b64encode(port_file2.getvalue()).decode()
-                        save_portfolio_csv_slot(2, csv_b64)
-                        st.rerun()
-                except Exception as e:
-                    st.error(f"Error: {e}")
+        st.markdown("#### Account 2 (optional)")
+        port_file2 = st.file_uploader("Portfolio CSV", type="csv", key="port2", label_visibility="collapsed")
+        if port_file2:
+            try:
+                _, temp_summary = parse_portfolio_csv(port_file2, show_analysis=True)
+                if temp_summary:
+                    csv_b64 = base64.b64encode(port_file2.getvalue()).decode()
+                    save_portfolio_csv_slot(2, csv_b64)
+                    st.rerun()
+            except Exception as e:
+                st.error(f"Error: {e}")
 
-            st.markdown("#### Account 3 (optional)")
-            port_file3 = st.file_uploader("Portfolio CSV", type="csv", key="port3", label_visibility="collapsed")
-            if port_file3:
-                try:
-                    _, temp_summary = parse_portfolio_csv(port_file3, show_analysis=True)
-                    if temp_summary:
-                        csv_b64 = base64.b64encode(port_file3.getvalue()).decode()
-                        save_portfolio_csv_slot(3, csv_b64)
-                        st.rerun()
-                except Exception as e:
-                    st.error(f"Error: {e}")
+        st.markdown("#### Account 3 (optional)")
+        port_file3 = st.file_uploader("Portfolio CSV", type="csv", key="port3", label_visibility="collapsed")
+        if port_file3:
+            try:
+                _, temp_summary = parse_portfolio_csv(port_file3, show_analysis=True)
+                if temp_summary:
+                    csv_b64 = base64.b64encode(port_file3.getvalue()).decode()
+                    save_portfolio_csv_slot(3, csv_b64)
+                    st.rerun()
+            except Exception as e:
+                st.error(f"Error: {e}")
 
-            if portfolio_loaded:
-                st.success(f"**Total: Sean+Kim ${current_sean_kim:,.0f} | Taylor ${current_taylor:,.0f}**")
+        if portfolio_loaded:
+            st.success(f"**Total: Sean+Kim ${current_sean_kim:,.0f} | Taylor ${current_taylor:,.0f}**")
                 
                 # Manual snapshot save button with better feedback
                 if st.button("💾 Save Current Snapshot", use_container_width=True):
