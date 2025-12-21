@@ -189,17 +189,45 @@ def show_dashboard(df, df_net, df_port, port_summary):
             except Exception as e:
                 st.error(f"Error: {e}")
 
-        # Refresh button to reload after uploads
-        if st.button("🔄 Refresh Dashboard", use_container_width=True):
-            st.rerun()
+        # Refresh button after uploads
+        if len(existing_slots) > 0:
+            st.markdown("---")
+            if st.button("🔄 Refresh After Upload", use_container_width=True, help="Click after uploading files to see updated totals"):
+                st.rerun()
 
         # Show summary and save button when portfolios are loaded
         if portfolio_loaded:
             st.markdown("---")
-            st.info(f"**Combined Total**\nSean+Kim: ${current_sean_kim:,.0f}\nTaylor: ${current_taylor:,.0f}")
             
-            # Manual snapshot save button
-            if st.button("💾 Save Current Snapshot", use_container_width=True, type="primary"):
+            # Show current totals with breakdown by person
+            st.success("**📊 Current Portfolio Totals**")
+            
+            # Get breakdown by person from the parsed data
+            if not df_port.empty and 'person' in df_port.columns:
+                person_totals = df_port.groupby('person')['market_value'].sum()
+                
+                sean_from_csv = person_totals.get('sean', 0)
+                kim_from_csv = person_totals.get('kim', 0)
+                taylor_from_csv = person_totals.get('taylor', 0)
+                
+                st.write(f"**Sean:** ${sean_from_csv:,.2f}")
+                st.write(f"**Kim:** ${kim_from_csv:,.2f}")
+                st.write(f"**Taylor:** ${taylor_from_csv:,.2f}")
+                st.write(f"**Sean+Kim Combined:** ${sean_from_csv + kim_from_csv:,.2f}")
+                
+                # Update the totals to use parsed values
+                current_sean_kim = sean_from_csv + kim_from_csv
+                current_taylor = taylor_from_csv
+            else:
+                st.write(f"**Sean+Kim:** ${current_sean_kim:,.2f}")
+                st.write(f"**Taylor:** ${current_taylor:,.0f}")
+            
+            st.markdown("---")
+            
+            # Manual snapshot save button with clearer messaging
+            st.warning("⚠️ **CSVs uploaded but not saved yet!**\nClick below to save this month's snapshot to the database.")
+            
+            if st.button("💾 Save Monthly Snapshot", use_container_width=True, type="primary"):
                 today = pd.Timestamp.today()
                 snapshot_date = (today + pd.offsets.MonthEnd(0)).date()
                 
@@ -211,7 +239,9 @@ def show_dashboard(df, df_net, df_port, port_summary):
                         if current_taylor > 0:
                             add_monthly_update(snapshot_date, 'Taylor', 'Personal', current_taylor)
                         st.success(f"✅ Snapshot saved for {snapshot_date.strftime('%B %Y')}")
-                        st.info(f"Sean+Kim: ${current_sean_kim:,.0f}" + (f"\nTaylor: ${current_taylor:,.0f}" if current_taylor > 0 else ""))
+                        st.info(f"Saved:\n- Sean+Kim: ${current_sean_kim:,.2f}\n- Taylor: ${current_taylor:,.2f}")
+                        # Auto-refresh after save
+                        st.rerun()
                     except Exception as e:
                         st.error(f"❌ Could not save snapshot: {e}")
 
