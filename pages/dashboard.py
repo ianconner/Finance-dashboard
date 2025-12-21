@@ -1,4 +1,4 @@
-# pages/dashboard.py - COMPLETE FINAL VERSION
+# pages/dashboard.py - FIXED INDENTATION ERROR
 
 import streamlit as st
 import pandas as pd
@@ -138,7 +138,7 @@ def show_dashboard(df, df_net, df_port, port_summary):
     # ------------------------------------------------------------------
     with st.sidebar:
         st.subheader("📊 Upload Portfolio CSVs")
-        st.caption("Latest upload becomes monthly snapshot – up to 3 accounts")
+        st.caption("Latest upload becomes monthly snapshot — up to 3 accounts")
 
         st.markdown("#### Account 1")
         port_file1 = st.file_uploader("Portfolio CSV", type="csv", key="port1", label_visibility="collapsed")
@@ -179,34 +179,34 @@ def show_dashboard(df, df_net, df_port, port_summary):
 
         if portfolio_loaded:
             st.success(f"**Total: Sean+Kim ${current_sean_kim:,.0f} | Taylor ${current_taylor:,.0f}**")
+            
+            # Manual snapshot save button with better feedback - FIXED INDENTATION
+            if st.button("💾 Save Current Snapshot", use_container_width=True):
+                today = pd.Timestamp.today()
+                snapshot_date = (today + pd.offsets.MonthEnd(0)).date()
                 
-                # Manual snapshot save button with better feedback
-                if st.button("💾 Save Current Snapshot", use_container_width=True):
-                    today = pd.Timestamp.today()
-                    snapshot_date = (today + pd.offsets.MonthEnd(0)).date()
-                    
-                    # Validation
-                    if current_sean_kim <= 0:
-                        st.error("❌ Cannot save: Sean+Kim total is $0. Please check CSV upload.")
-                    else:
-                        try:
-                            # Save Sean+Kim combined value
-                            add_monthly_update(snapshot_date, 'Sean', 'Personal', current_sean_kim)
-                            
-                            # Save Taylor if exists
-                            if current_taylor > 0:
-                                add_monthly_update(snapshot_date, 'Taylor', 'Personal', current_taylor)
-                            
-                            st.success(f"✅ Snapshot saved for {snapshot_date.strftime('%B %Y')}")
-                            st.info(f"Saved: Sean+Kim ${current_sean_kim:,.0f}" + (f" | Taylor ${current_taylor:,.0f}" if current_taylor > 0 else ""))
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"❌ Could not save snapshot: {e}")
+                # Validation
+                if current_sean_kim <= 0:
+                    st.error("❌ Cannot save: Sean+Kim total is $0. Please check CSV upload.")
+                else:
+                    try:
+                        # Save Sean+Kim combined value
+                        add_monthly_update(snapshot_date, 'Sean', 'Personal', current_sean_kim)
+                        
+                        # Save Taylor if exists
+                        if current_taylor > 0:
+                            add_monthly_update(snapshot_date, 'Taylor', 'Personal', current_taylor)
+                        
+                        st.success(f"✅ Snapshot saved for {snapshot_date.strftime('%B %Y')}")
+                        st.info(f"Saved: Sean+Kim ${current_sean_kim:,.0f}" + (f" | Taylor ${current_taylor:,.0f}" if current_taylor > 0 else ""))
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"❌ Could not save snapshot: {e}")
 
-            st.caption("Always ready when you are.")
-            if st.button("🧠 Talk to S.A.G.E.", use_container_width=True):
-                st.session_state.page = "ai"
-                st.rerun()
+        st.caption("Always ready when you are.")
+        if st.button("🧠 Talk to S.A.G.E.", use_container_width=True):
+            st.session_state.page = "ai"
+            st.rerun()
 
         # CSV Data Preview - Outside the expander to avoid nesting
         if portfolio_loaded and not df_port.empty:
@@ -407,11 +407,11 @@ def show_dashboard(df, df_net, df_port, port_summary):
             height=600,
             hovermode="x unified",
             legend=dict(orientation="h", y=1.02, x=1),
-            yaxis=dict(rangemode='tozero')  # Start y-axis at 0
+            yaxis=dict(rangemode='tozero')
         )
         st.plotly_chart(fig, use_container_width=True)
 
-        # YTD Growth - Now using the graph data
+        # YTD Growth
         st.markdown("---")
         st.markdown("#### YTD Growth (Jan 1 → Today)")
         current_year = datetime.now().year
@@ -419,11 +419,9 @@ def show_dashboard(df, df_net, df_port, port_summary):
         ytd_data = df_sean_kim_plot[df_sean_kim_plot.index.year == current_year].copy()
         
         if not ytd_data.empty and len(ytd_data) >= 2:
-            # Get first and last month of the year
             jan_data = ytd_data.iloc[0]
             latest_data = ytd_data.iloc[-1]
             
-            # Calculate YTD for each person
             ytd_pct = {}
             for person in ['Sean', 'Kim', 'Taylor']:
                 if person in ytd_data.columns:
@@ -436,7 +434,6 @@ def show_dashboard(df, df_net, df_port, port_summary):
                 else:
                     ytd_pct[person] = 0
             
-            # Combined Sean + Kim
             if 'Sean + Kim' in ytd_data.columns:
                 combined_start = jan_data['Sean + Kim']
                 combined_end = latest_data['Sean + Kim']
