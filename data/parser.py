@@ -49,8 +49,8 @@ def parse_portfolio_csv(file_obj, show_analysis=False):
         
         cleaned_content = '\n'.join(cleaned_lines)
         
-        # Parse CSV
-        df = pd.read_csv(io.StringIO(cleaned_content))
+        # Parse CSV - Tab delimited based on the sample
+        df = pd.read_csv(io.StringIO(cleaned_content), sep='\t')
         
     except Exception as e:
         if show_analysis:
@@ -65,25 +65,13 @@ def parse_portfolio_csv(file_obj, show_analysis=False):
     # Clean column names
     df.columns = df.columns.str.strip()
     
-    # Find Account Name column (looks for apostrophes like "Sean's" or known names)
-    account_name_col = None
-    for col in df.columns:
-        sample_values = df[col].dropna().astype(str).head(20)
-        has_apostrophes = any("'" in str(val) for val in sample_values)
-        has_account_pattern = any(
-            any(name in str(val).lower() for name in ['sean', 'kim', 'taylor', 'roth', 'ira', 'personal'])
-            for val in sample_values
-        )
-        has_spaces = any(" " in str(val) for val in sample_values)
-        
-        if (has_apostrophes or has_account_pattern) and has_spaces:
-            account_name_col = col
-            break
+    # The Account Name column is explicitly named "Account Name"
+    account_name_col = 'Account Name'
     
-    if not account_name_col:
+    if account_name_col not in df.columns:
         if show_analysis:
-            st.error("❌ Could not identify Account Name column automatically.")
-            st.write("Tip: Look for the column containing values like \"Sean's Personal\", \"Kim's IRA\", etc.")
+            st.error("❌ Could not find 'Account Name' column.")
+            st.write(f"Available columns: {list(df.columns)}")
         return pd.DataFrame(), {}
     
     # Required columns check
@@ -94,64 +82,69 @@ def parse_portfolio_csv(file_obj, show_analysis=False):
             st.error(f"Missing required columns: {', '.join(missing)}")
         return pd.DataFrame(), {}
 
-    # Clean numeric columns
-    df['Current Value'] = df['Current Value'].astype(str).str.replace(r'[\$,]', '', regex=True).str.strip()
+    # Clean Current Value - handle values in quotes with commas like "$1,120.95 "
+    df['Current Value'] = df['Current Value'].astype(str).str.replace(r'[\$,"\s]', '', regex=True).str.strip()
     df['Current Value'] = pd.to_numeric(df['Current Value'], errors='coerce').fillna(0)
     
+    # Clean other numeric columns
     for col in ['Quantity', 'Last Price', 'Cost Basis Total']:
         if col in df.columns:
-            df[col] = df[col].astype(str).str.replace(r'[\$,]', '', regex=True).str.strip()
+            df[col] = df[col].astype(str).str.replace(r'[\$,"\s]', '', regex=True).str.strip()
             df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
     
-    # Group by account and aggregate holdings
-    grouped = df.groupby(account_name_col).agg({
-        'Symbol': 'first',
-        'Description': 'first',
-        'Quantity': 'sum',
-        'Last Price': 'last',
+    # Sum by account (don't group by Symbol since we want total per account)
+    account_summary = df.groupby(account_name_col).agg({
         'Current Value': 'sum',
         'Cost Basis Total': 'sum'
     }).reset_index()
     
-    # Calculate gains
-    grouped['unrealized_gain'] = grouped['Current Value'] - grouped['Cost Basis Total']
+    total_value = account_summary['Current Value'].sum()
+    total_cost = account_summary['Cost Basis Total'].sum()
     
-    total_value = grouped['Current Value'].sum()
-    if total_value > 0:
-        grouped['allocation'] = grouped['Current Value'] / total_value
-    else:
-        grouped['allocation'] = 0
-
-    total_cost = grouped['Cost Basis Total'].sum()
+    # Create summary
     summary = {
         'total_value': total_value,
         'total_cost': total_cost,
-        'total_gain': grouped['unrealized_gain'].sum(),
-        'total_gain_pct': (grouped['unrealized_gain'].sum() / total_cost * 100) if total_cost > 0 else 0,
-        'top_holding': grouped.loc[grouped['Current Value'].idxmax(), 'Symbol'] if not grouped.empty else 'CASH',
-        'top_allocation': grouped['allocation'].max() * 100 if not grouped.empty else 0
+        'total_gain': total_value - total_cost,
+        'total_gain_pct': ((total_value - total_cost) / total_cost * 100) if total_cost > 0 else 0,
+        'top_holding': df.loc[df['Current Value'].idxmax(), 'Symbol'] if not df.empty and df['Current Value'].max() > 0 else 'CASH',
+        'top_allocation': (df['Current Value'].max() / total_value * 100) if total_value > 0 else 0
     }
-
-    # Rename for consistency
-    merged = grouped.rename(columns={
-        account_name_col: 'account',
-        'Symbol': 'ticker',
-        'Description': 'name',
-        'Quantity': 'quantity',
-        'Last Price': 'price',
-        'Current Value': 'market_value',
-        'Cost Basis Total': 'cost_basis',
-        'unrealized_gain': 'unrealized_gain',
-        'allocation': 'allocation'
-    })
+    
+    # For detailed holdings, keep individual rows
+    df['account_name'] = df[account_name_col]
+    df['ticker'] = df['Symbol'].astype(str).str.upper().str.strip()
+    df['market_value'] = df['Current Value']
+    df['shares'] = df.get('Quantity', 0)
+    df['price'] = df.get('Last Price', 0)
+    df['cost_basis'] = df.get('Cost Basis Total', 0)
+    df['unrealized_gain'] = df['market_value'] - df['cost_basis']
+    df['pct_gain'] = df.apply(
+        lambda row: (row['unrealized_gain'] / row['cost_basis'] * 100) if row['cost_basis'] > 0 else 0,
+        axis=1
+    )
+    
+    if total_value > 0:
+        df['allocation'] = df['market_value'] / total_value
+    else:
+        df['allocation'] = 0.0
     
     # Only show analysis if explicitly requested
     if show_analysis:
-        unique_accounts = merged['account'].unique()
+        unique_accounts = df['account_name'].unique()
         st.success(f"✅ Parsed successfully! Found accounts: {', '.join(unique_accounts)}")
         st.info(f"💰 Total Value: ${total_value:,.2f}")
-
-    return merged, summary
+        
+        # Show breakdown by account
+        st.markdown("**Account Breakdown:**")
+        for account in unique_accounts:
+            account_total = df[df['account_name'] == account]['market_value'].sum()
+            st.write(f"  - {account}: ${account_total:,.2f}")
+    
+    clean_df = df[['ticker', 'shares', 'price', 'market_value', 'cost_basis',
+                   'unrealized_gain', 'pct_gain', 'allocation', 'account_name']].copy()
+    
+    return clean_df, summary
 
 def merge_portfolios(portfolio_dfs):
     """Merge multiple parsed portfolio DataFrames (for multi-upload support)"""
@@ -222,32 +215,21 @@ def calculate_net_worth_from_csv(csv_data_b64):
         
         cleaned_content = '\n'.join(cleaned_lines)
         
-        raw_df = pd.read_csv(io.StringIO(cleaned_content))
+        # Parse CSV - Tab delimited
+        raw_df = pd.read_csv(io.StringIO(cleaned_content), sep='\t')
         raw_df.columns = raw_df.columns.str.strip()
         
-        # Find Account Name column (same logic) - NO UI OUTPUT
-        account_name_col = None
-        for col in raw_df.columns:
-            sample_values = raw_df[col].dropna().astype(str).head(20)
-            has_apostrophes = any("'" in str(val) for val in sample_values)
-            has_account_pattern = any(
-                any(name in str(val).lower() for name in ['sean', 'kim', 'taylor', 'roth', 'ira'])
-                for val in sample_values
-            )
-            has_spaces = any(" " in str(val) for val in sample_values)
-            
-            if (has_apostrophes or has_account_pattern) and has_spaces:
-                account_name_col = col
-                break
+        # Use explicit Account Name column
+        account_name_col = 'Account Name'
         
-        if not account_name_col or 'Current Value' not in raw_df.columns:
+        if account_name_col not in raw_df.columns or 'Current Value' not in raw_df.columns:
             return 0, 0
         
-        # Clean Current Value
-        raw_df['Current Value'] = raw_df['Current Value'].astype(str).str.replace(r'[\$,]', '', regex=True).str.strip()
+        # Clean Current Value - handle quotes and commas
+        raw_df['Current Value'] = raw_df['Current Value'].astype(str).str.replace(r'[\$,"\s]', '', regex=True).str.strip()
         raw_df['Current Value'] = pd.to_numeric(raw_df['Current Value'], errors='coerce').fillna(0)
         
-        # Group and sum
+        # Group and sum by account
         account_summary = raw_df.groupby(account_name_col)['Current Value'].sum()
         
         sean_kim_total = 0
@@ -255,7 +237,10 @@ def calculate_net_worth_from_csv(csv_data_b64):
         
         for account_name, total in account_summary.items():
             name_lower = str(account_name).lower()
-            if 'sean' in name_lower or 'kim' in name_lower:
+            # Sean's accounts include: Personal, ROTH IRA, IRA
+            if 'sean' in name_lower:
+                sean_kim_total += total
+            elif 'kim' in name_lower:
                 sean_kim_total += total
             elif 'taylor' in name_lower:
                 taylor_total += total
