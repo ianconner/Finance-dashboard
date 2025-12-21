@@ -1,4 +1,4 @@
-# pages/dashboard.py - FIXED INDENTATION ERROR
+# pages/dashboard.py - COMPLETE FIX - All features restored
 
 import streamlit as st
 import pandas as pd
@@ -149,6 +149,7 @@ def show_dashboard(df, df_net, df_port, port_summary):
                 if temp_summary:
                     csv_b64 = base64.b64encode(port_file1.getvalue()).decode()
                     save_portfolio_csv_slot(1, csv_b64)
+                    st.success("✅ Account 1 uploaded!")
                     st.rerun()
             except Exception as e:
                 st.error(f"Error: {e}")
@@ -161,6 +162,7 @@ def show_dashboard(df, df_net, df_port, port_summary):
                 if temp_summary:
                     csv_b64 = base64.b64encode(port_file2.getvalue()).decode()
                     save_portfolio_csv_slot(2, csv_b64)
+                    st.success("✅ Account 2 uploaded!")
                     st.rerun()
             except Exception as e:
                 st.error(f"Error: {e}")
@@ -173,15 +175,18 @@ def show_dashboard(df, df_net, df_port, port_summary):
                 if temp_summary:
                     csv_b64 = base64.b64encode(port_file3.getvalue()).decode()
                     save_portfolio_csv_slot(3, csv_b64)
+                    st.success("✅ Account 3 uploaded!")
                     st.rerun()
             except Exception as e:
                 st.error(f"Error: {e}")
 
+        # Show summary and save button when portfolios are loaded
         if portfolio_loaded:
+            st.markdown("---")
             st.success(f"**Total: Sean+Kim ${current_sean_kim:,.0f} | Taylor ${current_taylor:,.0f}**")
             
-            # Manual snapshot save button with better feedback - FIXED INDENTATION
-            if st.button("💾 Save Current Snapshot", use_container_width=True):
+            # Manual snapshot save button
+            if st.button("💾 Save Current Snapshot", use_container_width=True, type="primary"):
                 today = pd.Timestamp.today()
                 snapshot_date = (today + pd.offsets.MonthEnd(0)).date()
                 
@@ -203,28 +208,46 @@ def show_dashboard(df, df_net, df_port, port_summary):
                     except Exception as e:
                         st.error(f"❌ Could not save snapshot: {e}")
 
-        st.caption("Always ready when you are.")
-        if st.button("🧠 Talk to S.A.G.E.", use_container_width=True):
-            st.session_state.page = "ai"
-            st.rerun()
+            st.caption("Always ready when you are.")
+            if st.button("🧠 Talk to S.A.G.E.", use_container_width=True):
+                st.session_state.page = "ai"
+                st.rerun()
 
-        # CSV Data Preview - Outside the expander to avoid nesting
+        # CSV Data Preview
         if portfolio_loaded and not df_port.empty:
             st.markdown("---")
             st.markdown("### 📄 Portfolio CSV Data")
             st.caption("View how the app interpreted your uploaded files")
             
-            if st.checkbox("Show detailed portfolio breakdown", key="show_csv_detail"):
+            # Initialize checkbox state if it doesn't exist
+            if "show_csv_detail" not in st.session_state:
+                st.session_state.show_csv_detail = False
+            
+            # Toggle button instead of checkbox
+            if st.button("Show/Hide Portfolio Details", use_container_width=True):
+                st.session_state.show_csv_detail = not st.session_state.show_csv_detail
+                st.rerun()
+            
+            # Show details if toggled on
+            if st.session_state.show_csv_detail:
                 st.markdown("#### Holdings by Account")
                 if 'account_name' in df_port.columns:
                     for account in df_port['account_name'].unique():
                         account_data = df_port[df_port['account_name'] == account]
                         account_total = account_data['market_value'].sum()
                         st.markdown(f"**{account}** - Total: ${account_total:,.2f}")
+                        
+                        # Show holdings table
+                        display_cols = ['ticker', 'shares', 'price', 'market_value', 'cost_basis']
+                        if 'name' in account_data.columns:
+                            display_cols = ['ticker', 'name', 'shares', 'price', 'market_value', 'cost_basis']
+                        
                         st.dataframe(
-                            account_data[['ticker', 'name', 'shares', 'price', 'market_value', 'cost_basis']],
-                            use_container_width=True
+                            account_data[display_cols],
+                            use_container_width=True,
+                            hide_index=True
                         )
+                        st.markdown("")  # spacing
                 
                 st.markdown("#### Summary by Person")
                 summary_data = []
@@ -242,7 +265,7 @@ def show_dashboard(df, df_net, df_port, port_summary):
                         'Person': person,
                         'Total Value': f"${account_total:,.2f}"
                     })
-                st.dataframe(pd.DataFrame(summary_data), use_container_width=True)
+                st.dataframe(pd.DataFrame(summary_data), use_container_width=True, hide_index=True)
 
         st.markdown("---")
         st.subheader("Data Tools")
