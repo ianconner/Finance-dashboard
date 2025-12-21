@@ -185,12 +185,15 @@ def parse_portfolio_csv(file_obj, show_analysis=False):
     return clean_df, summary
 
 def merge_portfolios(portfolio_dfs):
-    """
-    Merge multiple parsed portfolio DataFrames (for multi-upload support)
-    Simple concatenation - no groupby operations
-    """
     if not portfolio_dfs:
         return pd.DataFrame(), {}
+    
+    # Simply concatenate all dataframes
+    combined = pd.concat(portfolio_dfs, ignore_index=True)
+    
+    # Calculate summary totals (NO GROUPBY)
+    total_value = combined['market_value'].sum()
+    total_cost = combined['cost_basis'].sum()
     
     # Simply concatenate all dataframes
     combined = pd.concat(portfolio_dfs, ignore_index=True)
