@@ -1,4 +1,4 @@
-# pages/dashboard.py - FIXED: Single dismissible analysis on upload only
+# pages/dashboard.py - FIXED: YTD, Confidence, and Graph issues
 
 import streamlit as st
 import pandas as pd
@@ -35,12 +35,12 @@ def show_dashboard(df, df_net, df_port, port_summary):
 
     for slot, b64_data in all_b64.items():
         try:
-            # Use the new function to calculate net worth from CSV (NO ANALYSIS DISPLAY)
+            # Calculate net worth from CSV (NO ANALYSIS)
             sean_kim_val, taylor_val = calculate_net_worth_from_csv(b64_data)
             current_sean_kim += sean_kim_val
             current_taylor += taylor_val
             
-            # Also parse for portfolio details (NO ANALYSIS DISPLAY)
+            # Also parse for portfolio details (NO ANALYSIS)
             decoded = base64.b64decode(b64_data).decode('utf-8')
             parsed_df, _ = parse_portfolio_csv(decoded, show_analysis=False)
             if not parsed_df.empty:
@@ -54,13 +54,13 @@ def show_dashboard(df, df_net, df_port, port_summary):
     if raw_portfolio_data:
         df_port, port_summary = merge_portfolios(raw_portfolio_data)
 
-    # Net worth from monthly data (includes latest snapshot)
+    # Net worth from monthly data
     df_sean_kim = df[df["person"].isin(["Sean", "Kim"])]
     df_sean_kim_total = df_sean_kim.groupby("date")["value"].sum().reset_index().sort_values("date")
     
     if not df_sean_kim_total.empty:
         current_sean_kim_from_db = df_sean_kim_total["value"].iloc[-1]
-        # Use portfolio value if available, otherwise use DB value
+        # Use portfolio value if available AND it's non-zero
         if current_sean_kim == 0:
             current_sean_kim = current_sean_kim_from_db
 
@@ -81,6 +81,7 @@ def show_dashboard(df, df_net, df_port, port_summary):
         progress_pct = (current_sean_kim / retirement_target) * 100
         years_remaining = 2042 - datetime.now().year
         
+        # FIXED: Use historical data for confidence calculation
         confidence, confidence_method = calculate_confidence_score(df_sean_kim_total, retirement_target)
         
         st.markdown("# 🎯 RETIREMENT 2042")
@@ -124,7 +125,7 @@ def show_dashboard(df, df_net, df_port, port_summary):
         st.markdown("---")
 
     # ------------------------------------------------------------------
-    # Peer Benchmark & YTD
+    # Peer Benchmark & YTD - FIXED YTD CALCULATION
     # ------------------------------------------------------------------
     if current_sean_kim > 0:
         pct, vs = peer_benchmark(current_sean_kim)
@@ -133,21 +134,32 @@ def show_dashboard(df, df_net, df_port, port_summary):
 
         st.markdown("#### YTD Growth (Jan 1 → Today)")
         current_year = datetime.now().year
+        
+        # FIXED: Get all data from current year, properly sorted
         ytd_df = df[df["date"].dt.year == current_year].copy()
-        if len(ytd_df["date"].unique()) > 1:
-            start_vals = ytd_df[ytd_df["date"] == ytd_df["date"].min()].groupby("person")["value"].sum()
-            latest_vals = ytd_df[ytd_df["date"] == ytd_df["date"].max()].groupby("person")["value"].sum()
+        
+        if not ytd_df.empty and len(ytd_df["date"].unique()) > 1:
+            # Get earliest and latest dates this year
+            earliest_date = ytd_df["date"].min()
+            latest_date = ytd_df["date"].max()
             
-            combined_start = start_vals.get('Sean', 0) + start_vals.get('Kim', 0)
-            combined_latest = latest_vals.get('Sean', 0) + latest_vals.get('Kim', 0)
+            # Sum by person at start and end
+            start_vals = ytd_df[ytd_df["date"] == earliest_date].groupby("person")["value"].sum()
+            latest_vals = ytd_df[ytd_df["date"] == latest_date].groupby("person")["value"].sum()
             
+            # Calculate YTD percentages
             ytd_pct = {}
             for person in ['Sean', 'Kim', 'Taylor']:
-                if person in start_vals and start_vals[person] > 0:
-                    ytd_pct[person] = ((latest_vals.get(person, 0) / start_vals[person]) - 1) * 100
+                start = start_vals.get(person, 0)
+                end = latest_vals.get(person, 0)
+                if start > 0:
+                    ytd_pct[person] = ((end / start) - 1) * 100
                 else:
                     ytd_pct[person] = 0
             
+            # Combined Sean + Kim
+            combined_start = start_vals.get('Sean', 0) + start_vals.get('Kim', 0)
+            combined_latest = latest_vals.get('Sean', 0) + latest_vals.get('Kim', 0)
             combined_ytd = ((combined_latest / combined_start) - 1) * 100 if combined_start > 0 else 0
 
             col1, col2, col3, col4 = st.columns(4)
@@ -161,7 +173,7 @@ def show_dashboard(df, df_net, df_port, port_summary):
         st.markdown("---")
 
     # ------------------------------------------------------------------
-    # Sidebar - Clean Uploads with ANALYSIS ONLY ON NEW UPLOAD
+    # Sidebar - Clean Uploads
     # ------------------------------------------------------------------
     with st.sidebar:
         with st.expander("S.A.G.E. – Your Strategic Partner", expanded=True):
@@ -177,9 +189,6 @@ def show_dashboard(df, df_net, df_port, port_summary):
                     if temp_summary:
                         csv_b64 = base64.b64encode(port_file1.getvalue()).decode()
                         save_portfolio_csv_slot(1, csv_b64)
-                        
-                        # Calculate totals (NO ANALYSIS)
-                        sean_kim_from_csv, taylor_from_csv = calculate_net_worth_from_csv(csv_b64)
                         st.rerun()
                 except Exception as e:
                     st.error(f"Error: {e}")
@@ -188,13 +197,10 @@ def show_dashboard(df, df_net, df_port, port_summary):
             port_file2 = st.file_uploader("Portfolio CSV", type="csv", key="port2", label_visibility="collapsed")
             if port_file2:
                 try:
-                    # SHOW ANALYSIS on fresh upload
                     _, temp_summary = parse_portfolio_csv(port_file2, show_analysis=True)
                     if temp_summary:
                         csv_b64 = base64.b64encode(port_file2.getvalue()).decode()
                         save_portfolio_csv_slot(2, csv_b64)
-                        
-                        sean_kim_from_csv, taylor_from_csv = calculate_net_worth_from_csv(csv_b64)
                         st.rerun()
                 except Exception as e:
                     st.error(f"Error: {e}")
@@ -203,13 +209,10 @@ def show_dashboard(df, df_net, df_port, port_summary):
             port_file3 = st.file_uploader("Portfolio CSV", type="csv", key="port3", label_visibility="collapsed")
             if port_file3:
                 try:
-                    # SHOW ANALYSIS on fresh upload
                     _, temp_summary = parse_portfolio_csv(port_file3, show_analysis=True)
                     if temp_summary:
                         csv_b64 = base64.b64encode(port_file3.getvalue()).decode()
                         save_portfolio_csv_slot(3, csv_b64)
-                        
-                        sean_kim_from_csv, taylor_from_csv = calculate_net_worth_from_csv(csv_b64)
                         st.rerun()
                 except Exception as e:
                     st.error(f"Error: {e}")
@@ -304,7 +307,7 @@ def show_dashboard(df, df_net, df_port, port_summary):
                 st.error(f"Error: {e}")
 
     # ------------------------------------------------------------------
-    # Main Tabs - Full Charts & Tables
+    # Main Tabs - FIXED: Proper data handling for graphs
     # ------------------------------------------------------------------
     if df.empty:
         st.info("Add data to see the full dashboard.")
@@ -313,12 +316,26 @@ def show_dashboard(df, df_net, df_port, port_summary):
     tab1, tab2 = st.tabs(["Retirement (Sean + Kim)", "💎 Taylor's Nest Egg"])
 
     with tab1:
-        # Growth Chart
-        df_pivot = df.pivot_table(index="date", columns="person", values="value", aggfunc="sum") \
-                      .resample("ME").last().ffill().fillna(0)
+        # FIXED: Create proper pivot with forward fill to avoid drops
+        df_pivot = df.pivot_table(index="date", columns="person", values="value", aggfunc="sum")
         
-        df_sean_kim_plot = df_pivot[['Sean', 'Kim']].copy() if 'Sean' in df_pivot.columns and 'Kim' in df_pivot.columns else df_pivot
-        df_sean_kim_plot["Sean + Kim"] = df_sean_kim_plot.get("Sean", 0) + df_sean_kim_plot.get("Kim", 0)
+        # Resample to month-end and forward fill (don't use last() which can create gaps)
+        df_pivot = df_pivot.resample("ME").sum()
+        df_pivot = df_pivot.replace(0, pd.NA).ffill().fillna(0)
+        
+        # Create Sean + Kim combined
+        df_sean_kim_plot = pd.DataFrame()
+        if 'Sean' in df_pivot.columns:
+            df_sean_kim_plot['Sean'] = df_pivot['Sean']
+        else:
+            df_sean_kim_plot['Sean'] = 0
+            
+        if 'Kim' in df_pivot.columns:
+            df_sean_kim_plot['Kim'] = df_pivot['Kim']
+        else:
+            df_sean_kim_plot['Kim'] = 0
+            
+        df_sean_kim_plot["Sean + Kim"] = df_sean_kim_plot["Sean"] + df_sean_kim_plot["Kim"]
 
         fig = go.Figure()
         colors = {"Sean": "#636EFA", "Kim": "#EF553B", "Sean + Kim": "#AB63FA"}
@@ -330,6 +347,7 @@ def show_dashboard(df, df_net, df_port, port_summary):
                     x=df_sean_kim_plot.index,
                     y=df_sean_kim_plot[person],
                     name=person,
+                    mode='lines',
                     line=dict(color=colors[person], width=widths.get(person, 3)),
                     hovertemplate=f"<b>{person}</b><br>%{{x|%b %Y}}: $%{{y:,.0f}}<extra></extra>"
                 ))
@@ -338,7 +356,8 @@ def show_dashboard(df, df_net, df_port, port_summary):
             title="Retirement Portfolio Growth (Sean + Kim)",
             height=600,
             hovermode="x unified",
-            legend=dict(orientation="h", y=1.02, x=1)
+            legend=dict(orientation="h", y=1.02, x=1),
+            yaxis=dict(rangemode='tozero')  # Start y-axis at 0
         )
         st.plotly_chart(fig, use_container_width=True)
 
@@ -427,7 +446,11 @@ def show_dashboard(df, df_net, df_port, port_summary):
                 fill='tozeroy', fillcolor='rgba(0,204,150,0.1)',
                 hovertemplate="<b>Taylor</b><br>%{x|%b %Y}: $%{y:,.0f}<extra></extra>"
             ))
-            fig_t.update_layout(title="Taylor's Portfolio Growth Over Time", height=500)
+            fig_t.update_layout(
+                title="Taylor's Portfolio Growth Over Time",
+                height=500,
+                yaxis=dict(rangemode='tozero')
+            )
             st.plotly_chart(fig_t, use_container_width=True)
 
             st.markdown("---")
