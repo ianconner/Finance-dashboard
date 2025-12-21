@@ -181,28 +181,6 @@ def show_dashboard(df, df_net, df_port, port_summary):
             if portfolio_loaded:
                 st.success(f"**Total: Sean+Kim ${current_sean_kim:,.0f} | Taylor ${current_taylor:,.0f}**")
                 
-                # CSV Data Preview Section
-                with st.expander("📄 View Portfolio CSV Data", expanded=False):
-                    st.markdown("### Raw Portfolio Data")
-                    st.caption("This shows exactly how the app is interpreting your uploaded CSV files")
-                    
-                    if not df_port.empty:
-                        st.markdown("#### Holdings by Account")
-                        # Group by account to show what's in each
-                        if 'account' in df_port.columns:
-                            for account in df_port['account'].unique():
-                                account_data = df_port[df_port['account'] == account]
-                                account_total = account_data['market_value'].sum()
-                                st.markdown(f"**{account}** - Total: ${account_total:,.2f}")
-                                st.dataframe(
-                                    account_data[['ticker', 'name', 'quantity', 'price', 'market_value', 'cost_basis']],
-                                    use_container_width=True
-                                )
-                        else:
-                            st.dataframe(df_port, use_container_width=True)
-                        
-                        st.markdown("#### Summary by Person")
-                        if 'account' in df_port.columns:
                             # Calculate totals by person
                             summary_data = []
                             for account in df_port['account'].unique():
