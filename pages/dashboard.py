@@ -19,7 +19,9 @@ from analysis.projections import calculate_confidence_score
 from config.styles import inject_custom_css, render_hero_section, render_section_header
 
 def show_dashboard(df, df_net, df_port, port_summary):
-     inject_custom_css()  # Add this line first!
+    # Inject custom CSS - FIRST LINE
+    inject_custom_css()
+    
     # Initialize session state for portfolio details toggle
     if "show_csv_detail" not in st.session_state:
         st.session_state.show_csv_detail = False
