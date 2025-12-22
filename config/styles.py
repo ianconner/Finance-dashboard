@@ -549,14 +549,14 @@ def render_hero_section(title, subtitle):
                     animation: dividerPulse 3s ease-in-out infinite;'></div>
     </div>
     <style>
-        @keyframes heroGlow {
-            0%, 100% { opacity: 0.6; }
-            50% { opacity: 1; }
-        }
-        @keyframes dividerPulse {
-            0%, 100% { box-shadow: 0 0 20px rgba(0, 180, 255, 1); }
-            50% { box-shadow: 0 0 40px rgba(0, 180, 255, 1); }
-        }
+        @keyframes heroGlow {{
+            0%, 100% {{ opacity: 0.6; }}
+            50% {{ opacity: 1; }}
+        }}
+        @keyframes dividerPulse {{
+            0%, 100% {{ box-shadow: 0 0 20px rgba(0, 180, 255, 1); }}
+            50% {{ box-shadow: 0 0 40px rgba(0, 180, 255, 1); }}
+        }}
     </style>
     """, unsafe_allow_html=True)
 
@@ -577,9 +577,9 @@ def render_section_header(icon, title, subtitle=""):
         {subtitle_html}
     </div>
     <style>
-        @keyframes headerUnderline {
-            0%, 100% { opacity: 0.7; }
-            50% { opacity: 1; }
-        }
+        @keyframes headerUnderline {{
+            0%, 100% {{ opacity: 0.7; }}
+            50% {{ opacity: 1; }}
+        }}
     </style>
     """, unsafe_allow_html=True)
