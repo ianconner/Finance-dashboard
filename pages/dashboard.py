@@ -18,7 +18,7 @@ from data.importers import import_excel_format
 from analysis.projections import calculate_confidence_score
 from config.styles import inject_custom_css, render_hero_section, render_section_header
 
-ef show_dashboard(df, df_net, df_port, port_summary):
+def show_dashboard(df, df_net, df_port, port_summary):
     # TEMPORARY TEST - Simple CSS
     st.markdown("""
     <style>
