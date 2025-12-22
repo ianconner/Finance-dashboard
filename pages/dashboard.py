@@ -18,9 +18,18 @@ from data.importers import import_excel_format
 from analysis.projections import calculate_confidence_score
 from config.styles import inject_custom_css, render_hero_section, render_section_header
 
-def show_dashboard(df, df_net, df_port, port_summary):
-    # Inject custom CSS - FIRST LINE
-    inject_custom_css()
+ef show_dashboard(df, df_net, df_port, port_summary):
+    # TEMPORARY TEST - Simple CSS
+    st.markdown("""
+    <style>
+    .stApp {
+        background: #001d3d;
+    }
+    h1 { color: #00d4ff !important; }
+    </style>
+    """, unsafe_allow_html=True)
+    
+    st.write("TEST - Can you see this text?")  # Add this test line
     
     # Initialize session state for portfolio details toggle
     if "show_csv_detail" not in st.session_state:
